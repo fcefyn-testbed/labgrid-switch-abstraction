@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68.0", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "labgrid-switch-abstraction"
+version = "0.1.0"
+description = "Vendor-agnostic switch abstraction layer for LabGrid testbeds"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.10"
+dependencies = [
+    "netmiko",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[project.scripts]
+switch-vlan = "switch_abstraction.vlan_manager:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
