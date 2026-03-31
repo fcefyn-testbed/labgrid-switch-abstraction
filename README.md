@@ -23,6 +23,16 @@ set_port_vlan("belkin_rt3200_2", 200, dut_map=dut_map)
 restore_port_vlan("belkin_rt3200_2", dut_map=dut_map)
 ```
 
+### Querying current port VLAN (PVID)
+
+```python
+from switch_abstraction.client import SwitchClient
+
+client = SwitchClient()
+pvid = client.get_port_pvid(port=16)
+# pvid is an int (e.g. 104) or None on failure
+```
+
 ### CLI
 
 ```bash

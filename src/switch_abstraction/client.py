@@ -237,6 +237,25 @@ class SwitchClient:
             finally:
                 conn.disconnect()
 
+    def get_port_pvid(self, port: int) -> int | None:
+        """Query the switch for the current PVID of a port.
+
+        Returns the PVID as int, or None on failure.
+        """
+        output = self.send_command(
+            f"show interface switchport gigabitEthernet 1/0/{port}"
+        )
+        if output is None:
+            return None
+        for line in output.splitlines():
+            if "PVID" in line.upper():
+                parts = line.split()
+                for part in parts:
+                    if part.isdigit():
+                        return int(part)
+        logger.warning("Could not parse PVID from switch output for port %d", port)
+        return None
+
     def poe_on(self, port: int) -> bool:
         """Enable PoE on a switch port."""
         return self.poe_on_multi([port])

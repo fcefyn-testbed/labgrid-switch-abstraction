@@ -18,3 +18,8 @@ __all__ = [
     "restore_port_vlan",
     "set_port_vlan",
 ]
+
+
+def get_port_pvid(port: int) -> int | None:
+    """Query the switch for the current PVID of a port. Convenience wrapper."""
+    return SwitchClient().get_port_pvid(port)
