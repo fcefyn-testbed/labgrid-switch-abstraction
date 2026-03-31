@@ -26,8 +26,16 @@ restore_port_vlan("belkin_rt3200_2", dut_map=dut_map)
 ### CLI
 
 ```bash
-switch-vlan belkin_rt3200_2 200 --config /etc/testbed/dut-config.yaml
-switch-vlan belkin_rt3200_2 --restore --config /etc/testbed/dut-config.yaml
+# Single DUT
+switch-vlan belkin_rt3200_2 200
+switch-vlan belkin_rt3200_2 --restore
+
+# Multiple DUTs
+switch-vlan belkin_rt3200_1 belkin_rt3200_2 belkin_rt3200_3 200
+switch-vlan belkin_rt3200_1 belkin_rt3200_2 --restore
+
+# All DUTs at once
+switch-vlan --restore-all
 ```
 
 ### Environment variable

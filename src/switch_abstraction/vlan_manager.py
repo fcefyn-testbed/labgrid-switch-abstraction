@@ -14,15 +14,17 @@ Usage (library):
     set_port_vlan("belkin_rt3200_2", 200, dut_map=dut_map)
 
 Usage (CLI):
-    switch-vlan belkin_rt3200_2 200 --config /etc/testbed/dut-config.yaml
+    switch-vlan belkin_rt3200_2 200
     switch-vlan belkin_rt3200_2 --restore
+    switch-vlan belkin_rt3200_1 belkin_rt3200_2 belkin_rt3200_3 200
+    switch-vlan belkin_rt3200_1 belkin_rt3200_2 --restore
+    switch-vlan --restore-all
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 from pathlib import Path
 
@@ -125,16 +127,28 @@ def restore_port_vlan(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Switch a DUT port to a target VLAN",
+        description="Switch DUT port(s) to a target VLAN",
+        epilog="""
+Examples:
+  switch-vlan belkin_rt3200_1 200              # One DUT to VLAN 200
+  switch-vlan belkin_rt3200_1 belkin_rt3200_2 200   # Multiple DUTs to VLAN 200
+  switch-vlan belkin_rt3200_1 --restore        # Restore one DUT
+  switch-vlan belkin_rt3200_1 belkin_rt3200_2 --restore  # Restore multiple
+  switch-vlan --restore-all                    # Restore all DUTs to isolated VLANs
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("dut", help="DUT name from dut-config.yaml")
     parser.add_argument(
-        "vlan", nargs="?", type=int,
-        help="Target VLAN ID (e.g. 200 for mesh)",
+        "args", nargs="*",
+        help="DUT name(s), optionally followed by a VLAN ID",
     )
     parser.add_argument(
         "--restore", action="store_true",
-        help="Restore DUT to its default isolated VLAN",
+        help="Restore DUT(s) to their default isolated VLAN",
+    )
+    parser.add_argument(
+        "--restore-all", action="store_true",
+        help="Restore ALL DUTs in config to their default isolated VLANs",
     )
     parser.add_argument(
         "--config", type=Path, default=None,
@@ -142,22 +156,54 @@ def main():
     )
     parser.add_argument("-v", "--verbose", action="store_true")
 
-    args = parser.parse_args()
+    parsed = parser.parse_args()
 
     logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
+        level=logging.DEBUG if parsed.verbose else logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
 
-    if args.restore:
-        ok = restore_port_vlan(args.dut, config_path=args.config)
-    elif args.vlan is not None:
-        ok = set_port_vlan(args.dut, args.vlan, config_path=args.config)
-    else:
-        parser.error("Provide a VLAN ID or --restore")
-        return
+    if parsed.restore_all:
+        dut_map = load_dut_map(parsed.config)
+        all_ok = True
+        for name in dut_map:
+            if not restore_port_vlan(name, dut_map=dut_map):
+                all_ok = False
+        sys.exit(0 if all_ok else 1)
 
-    sys.exit(0 if ok else 1)
+    positional = parsed.args
+    if not positional:
+        parser.error("Provide DUT name(s) or use --restore-all")
+
+    vlan_id: int | None = None
+    dut_names: list[str]
+
+    if not parsed.restore:
+        try:
+            vlan_id = int(positional[-1])
+            dut_names = positional[:-1]
+        except ValueError:
+            vlan_id = None
+            dut_names = positional
+
+        if vlan_id is None:
+            parser.error("Last argument must be a VLAN ID, or use --restore")
+        if not dut_names:
+            parser.error("Provide at least one DUT name before the VLAN ID")
+    else:
+        dut_names = positional
+
+    dut_map = load_dut_map(parsed.config)
+    all_ok = True
+    for name in dut_names:
+        if parsed.restore:
+            if not restore_port_vlan(name, dut_map=dut_map):
+                all_ok = False
+        else:
+            if not set_port_vlan(name, vlan_id, dut_map=dut_map):
+                all_ok = False
+
+    sys.exit(0 if all_ok else 1)
 
 
 if __name__ == "__main__":
