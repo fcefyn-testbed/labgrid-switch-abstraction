@@ -7,7 +7,7 @@ Analogous to [PDUDaemon](https://github.com/pdudaemon/pdudaemon) for power contr
 ## Install
 
 ```bash
-pip install git+https://github.com/<org>/labgrid-switch-abstraction.git
+pip install git+https://github.com/fcefyn-testbed/labgrid-switch-abstraction.git
 ```
 
 ## Usage
@@ -43,14 +43,16 @@ switch-vlan belkin_rt3200_2 200
 
 ### Switch credentials
 
-Create `~/.config/poe_switch_control.conf`:
+Create `~/.config/switch.conf`:
 
 ```ini
-POE_SWITCH_HOST=192.168.0.1
-POE_SWITCH_USER=admin
-POE_SWITCH_PASSWORD=secret
-POE_SWITCH_DRIVER=tplink_jetstream
+SWITCH_HOST=192.168.0.1
+SWITCH_USER=admin
+SWITCH_PASSWORD=secret
+SWITCH_DRIVER=tplink_jetstream
 ```
+
+Environment variables `SWITCH_HOST`, `SWITCH_USER`, `SWITCH_PASSWORD` override the config file.
 
 ### DUT config (YAML)
 

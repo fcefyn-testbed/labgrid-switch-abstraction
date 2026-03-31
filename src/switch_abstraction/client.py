@@ -31,15 +31,12 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_DEVICE_TYPE = "tplink_jetstream"
 
-LOCK_PATH = "/tmp/poe_switch.lock"
+LOCK_PATH = "/tmp/switch.lock"
 LOCK_TIMEOUT = 60
 
 
 def _open_lock_file():
-    """Open lock file for flock. Creates with 0o666 to allow any user to open it.
-    On PermissionError (e.g. file exists with restrictive perms from root),
-    tries chmod 0o666 and retry. Raises helpful error if still failing.
-    """
+    """Open lock file for flock. Creates with 0o666 to allow any user to open it."""
     try:
         return os.open(LOCK_PATH, os.O_CREAT | os.O_RDWR, 0o666)
     except PermissionError:
@@ -50,7 +47,7 @@ def _open_lock_file():
             except (PermissionError, OSError) as e:
                 raise PermissionError(
                     f"Cannot access lock file {LOCK_PATH}. "
-                    "If it was created by root, run: sudo chmod 666 /tmp/poe_switch.lock"
+                    f"If it was created by root, run: sudo chmod 666 {LOCK_PATH}"
                 ) from e
         raise
 
@@ -87,12 +84,18 @@ def switch_lock(timeout: float = LOCK_TIMEOUT) -> Generator[bool, None, None]:
 
 
 def _get_config_paths() -> list[str]:
-    """Return config file paths to check, accounting for sudo."""
+    """Return config file paths to check, accounting for sudo.
+
+    Priority:
+    1. SWITCH_CONFIG env var
+    2. ~/.config/switch.conf
+    3. /etc/switch.conf
+    """
     paths: list[str] = []
-    if explicit := os.environ.get("POE_SWITCH_CONFIG"):
+    if explicit := os.environ.get("SWITCH_CONFIG"):
         paths.append(explicit)
-    paths.append(str(user_config_dir() / "poe_switch_control.conf"))
-    paths.append("/etc/poe_switch_control.conf")
+    paths.append(str(user_config_dir() / "switch.conf"))
+    paths.append("/etc/switch.conf")
     return paths
 
 
@@ -100,9 +103,9 @@ def load_config() -> dict[str, str]:
     """Load switch credentials from config file or environment.
 
     Config file format (key=value, one per line):
-        POE_SWITCH_HOST=192.168.0.1
-        POE_SWITCH_USER=admin
-        POE_SWITCH_PASSWORD=secret
+        SWITCH_HOST=192.168.0.1
+        SWITCH_USER=admin
+        SWITCH_PASSWORD=secret
     """
     config: dict[str, str] = {}
     for path in _get_config_paths():
@@ -121,12 +124,9 @@ def load_config() -> dict[str, str]:
 
 
 def load_switch_password() -> str:
-    """Load switch password from config file or POE_SWITCH_PASSWORD env var."""
+    """Load switch password from config file or SWITCH_PASSWORD env var."""
     config = load_config()
-    return (
-        os.environ.get("POE_SWITCH_PASSWORD")
-        or config.get("POE_SWITCH_PASSWORD", "")
-    )
+    return os.environ.get("SWITCH_PASSWORD") or config.get("SWITCH_PASSWORD", "")
 
 
 def get_switch_driver():
@@ -134,7 +134,7 @@ def get_switch_driver():
     from switch_abstraction.drivers import get_driver
 
     config = load_config()
-    name = config.get("POE_SWITCH_DRIVER", "tplink_jetstream")
+    name = config.get("SWITCH_DRIVER", "tplink_jetstream")
     return get_driver(name)
 
 
@@ -147,10 +147,10 @@ def get_credentials(
     """Build a credentials dict, filling gaps from config/env."""
     config = load_config()
     return {
-        "host": host or os.environ.get("POE_SWITCH_HOST") or config.get("POE_SWITCH_HOST", DEFAULT_SWITCH_HOST),
-        "user": user or os.environ.get("POE_SWITCH_USER") or config.get("POE_SWITCH_USER", DEFAULT_SWITCH_USER),
-        "password": password or os.environ.get("POE_SWITCH_PASSWORD") or config.get("POE_SWITCH_PASSWORD", ""),
-        "device_type": device_type or config.get("POE_SWITCH_DEVICE_TYPE", DEFAULT_DEVICE_TYPE),
+        "host": host or os.environ.get("SWITCH_HOST") or config.get("SWITCH_HOST", DEFAULT_SWITCH_HOST),
+        "user": user or os.environ.get("SWITCH_USER") or config.get("SWITCH_USER", DEFAULT_SWITCH_USER),
+        "password": password or os.environ.get("SWITCH_PASSWORD") or config.get("SWITCH_PASSWORD", ""),
+        "device_type": device_type or config.get("SWITCH_DEVICE_TYPE", DEFAULT_DEVICE_TYPE),
     }
 
 
@@ -176,8 +176,8 @@ class SwitchClient:
 
         if not self.password:
             raise ValueError(
-                "Switch password required. Set POE_SWITCH_PASSWORD in "
-                "~/.config/poe_switch_control.conf or via env var."
+                "Switch password required. Set SWITCH_PASSWORD in "
+                "~/.config/switch.conf or via env var."
             )
 
     def _connect(self):

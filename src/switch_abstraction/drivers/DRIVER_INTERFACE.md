@@ -1,78 +1,53 @@
-# Interfaz del driver de switch
+# Switch Driver Interface
 
-Este documento define el contrato que debe implementar un módulo driver de switch. Los drivers se cargan dinámicamente según `POE_SWITCH_DRIVER` en `~/.config/poe_switch_control.conf`.
+This document defines the contract that a switch driver module must implement. Drivers are loaded dynamically based on `SWITCH_DRIVER` in `~/.config/switch.conf`.
 
-Para agregar soporte para un switch nuevo:
+To add support for a new switch:
 
-1. Crear `switch_drivers/<nombre>.py` implementando la interfaz que se describe abajo.
-2. Configurar `POE_SWITCH_DRIVER=<nombre>` y `POE_SWITCH_DEVICE_TYPE=<netmiko_type>` en tu config.
-3. Ver [Netmiko PLATFORMS](https://github.com/ktbyers/netmiko/blob/develop/PLATFORMS.md) para los valores de `device_type` soportados.
+1. Create `drivers/<name>.py` implementing the interface described below.
+2. Set `SWITCH_DRIVER=<name>` and `SWITCH_DEVICE_TYPE=<netmiko_type>` in the config.
+3. See [Netmiko PLATFORMS](https://github.com/ktbyers/netmiko/blob/develop/PLATFORMS.md) for supported `device_type` values.
 
-## Exportaciones requeridas
-
-### PRESETS (dict)
-
-Diccionario que mapea nombres de preset a definiciones. Lo usa `switch_vlan_preset.py`.
-
-```python
-PRESETS = {
-    "isolated": (PRESET_ISOLATED_TUPLES, create_vlan_200=False),
-    "mesh": (PRESET_MESH_TUPLES, create_vlan_200=True),
-}
-```
-
-Cada preset es una lista de tuplas `(puerto, list[str] de comandos de interfaz)`. El driver convierte esto en una lista de comandos CLI completos.
-
-### build_preset_commands(preset_name: str) -> list[str]
-
-Construye los comandos CLI para un preset VLAN completo (isolated o mesh). Lo llama `switch_vlan_preset.py`.
-
-- **preset_name**: Una de las claves en `PRESETS`.
-- **Retorna**: Lista de comandos CLI a enviar al switch.
-- **Lanza**: `ValueError` si preset_name es desconocido.
+## Required exports
 
 ### build_poe_commands(port: int, action: str) -> list[str]
 
-Construye los comandos CLI para habilitar o deshabilitar PoE en un puerto. Lo llama `poe_switch_control.py` vía `switch_client.py`.
+Build CLI commands to enable/disable PoE on a port. Called by `poe_switch_control.py` via `SwitchClient`.
 
-- **port**: Número de puerto del switch (base 1).
-- **action**: `"on"` u `"off"`.
-- **Retorna**: Lista de comandos CLI.
-- **Lanza**: `ValueError` si action no es `"on"` u `"off"`.
+- **port**: Switch port number (1-based).
+- **action**: `"on"` or `"off"`.
+- **Returns**: List of CLI commands.
+- **Raises**: `ValueError` if action is not `"on"` or `"off"`.
 
-Para switches sin PoE, retornar una lista vacía o comandos idempotentes que no hagan nada.
-
-### build_hybrid_commands(port_assignments, ...) -> list[str]
-
-Construye los comandos CLI para asignación híbrida de VLANs (DUTs repartidos entre pools openwrt y libremesh). Lo llama `pool-manager.py`.
-
-**Parámetros:**
-
-| Parámetro | Tipo | Descripción |
-|-----------|------|-------------|
-| port_assignments | list[tuple[int, str, int]] | (puerto, pool, isolated_vlan) por puerto DUT. Pool es `"isolated"` o `"mesh"`. |
-| active_isolated_vlans | set[int] | IDs de VLAN usados por DUTs del pool openwrt. |
-| has_libremesh_duts | bool | Si hay algún DUT en el pool libremesh. |
-| uplink_ports | list[int] | Puertos que llevan tráfico etiquetado (trunk al host). |
-| vlan_mesh | int | ID de VLAN para la red mesh (por defecto 200). |
-| ports_to_include | set[int] \| None | Si está definido, solo configurar estos puertos (aplicación diferencial). |
-| include_uplinks | bool | Si es False, omitir la config de puertos uplink. |
-
-**Retorna:** Lista de comandos CLI.
-
-### ensure_vlan_commands(vlan_id: int, name: str | None = None) -> list[str]
-
-Construye los comandos CLI para crear una VLAN si no existe. Opcional; se usa para creación dinámica de VLANs.
+For switches without PoE, return an empty list or idempotent no-op commands.
 
 ### assign_port_vlan_commands(port, vlan_id, mode, remove_vlans) -> list[str]
 
-Construye los comandos CLI para asignar un puerto a una VLAN. Opcional; se usa para config de puerto de bajo nivel.
+Build CLI commands to assign a port to a VLAN. Called by `vlan_manager.py` for per-DUT dynamic VLAN switching.
 
-- **port**: Número de puerto del switch.
-- **vlan_id**: VLAN a asignar.
-- **mode**: `"untagged"` o `"tagged"`.
-- **remove_vlans**: VLANs a quitar del puerto antes de asignar.
+- **port**: Switch port number.
+- **vlan_id**: VLAN to assign.
+- **mode**: `"untagged"` or `"tagged"`.
+- **remove_vlans**: VLANs to remove from the port before assigning.
 
-## Implementación de referencia
+### ensure_vlan_commands(vlan_id: int, name: str | None = None) -> list[str]
 
-Ver [tplink_jetstream.py](tplink_jetstream.py) para una implementación completa orientada a switches TP-Link JetStream (p. ej. SG2016P). Netmiko device_type para este driver: `tplink_jetstream`.
+Build CLI commands to create a VLAN if it does not exist. Optional; used for dynamic VLAN creation.
+
+## Optional exports (legacy)
+
+### PRESETS (dict)
+
+Dictionary mapping preset names to definitions. Used by legacy `switch_vlan_preset.py`.
+
+### build_preset_commands(preset_name: str) -> list[str]
+
+Build CLI commands for a full VLAN preset (isolated or mesh). Legacy - used by `switch_vlan_preset.py`.
+
+### build_hybrid_commands(port_assignments, ...) -> list[str]
+
+Build CLI commands for hybrid VLAN assignment. Legacy - used by `pool-manager.py`.
+
+## Reference implementation
+
+See [tplink_jetstream.py](tplink_jetstream.py) for a complete implementation for TP-Link JetStream switches (e.g. SG2016P). Netmiko device_type for this driver: `tplink_jetstream`.
