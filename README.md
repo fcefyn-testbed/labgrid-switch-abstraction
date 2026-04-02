@@ -12,7 +12,7 @@ Switch-specific CLI commands are delegated to **driver modules** (pluggable, one
 # 1. Install
 pip install git+https://github.com/fcefyn-testbed/labgrid-switch-abstraction.git
 
-# 2. Create switch credentials
+# 2. Create switch credentials (TP-Link example; see below for OpenWrt)
 mkdir -p ~/.config
 cat > ~/.config/switch.conf << 'EOF'
 SWITCH_HOST=192.168.0.1
@@ -22,6 +22,10 @@ SWITCH_DRIVER=tplink_jetstream
 SWITCH_DEVICE_TYPE=tplink_jetstream
 EOF
 chmod 600 ~/.config/switch.conf
+
+# For a switch running OpenWrt, use:
+# SWITCH_DRIVER=openwrt
+# SWITCH_DEVICE_TYPE=linux
 
 # 3. Create DUT config
 sudo mkdir -p /etc/testbed
@@ -211,15 +215,28 @@ def parse_port_pvid(output: str) -> int | None: ...
 
 3. Set `SWITCH_DRIVER=<name>` and `SWITCH_DEVICE_TYPE=<netmiko_type>` in `switch.conf`.
 
+**Example `switch.conf` for an OpenWrt switch:**
+
+```ini
+SWITCH_HOST=192.168.128.2
+SWITCH_USER=root
+SWITCH_PASSWORD=
+SWITCH_DRIVER=openwrt
+SWITCH_DEVICE_TYPE=linux
+```
+
+> **Note for UCI-based drivers:** The `openwrt` driver also exports `ensure_commit_commands()` to emit a final `uci commit network` + service reload. Drivers using interactive CLI (like `tplink_jetstream`) don't need this because `send_config_set()` applies changes on exit. See [DRIVER_INTERFACE.md](src/switch_abstraction/drivers/DRIVER_INTERFACE.md) for details.
+
 ### Netmiko device types
 
-The `SWITCH_DEVICE_TYPE` value is passed directly to Netmiko's `ConnectHandler(device_type=...)`. See the [Netmiko PLATFORMS list](https://github.com/ktbyers/netmiko/blob/develop/PLATFORMS.md) for all supported types. Common examples: `tplink_jetstream`, `cisco_ios`, `arista_eos`, `hp_procurve`.
+The `SWITCH_DEVICE_TYPE` value is passed directly to Netmiko's `ConnectHandler(device_type=...)`. See the [Netmiko PLATFORMS list](https://github.com/ktbyers/netmiko/blob/develop/PLATFORMS.md) for all supported types. Common examples: `tplink_jetstream`, `cisco_ios`, `arista_eos`, `hp_procurve`, `linux`.
 
 ## Tested switches
 
-| Switch | Driver | Netmiko device_type | Status |
+| Switch | Driver | Netmiko device_type | Notes |
 |---|---|---|---|
-| TP-Link SG2016P (JetStream) | `tplink_jetstream` | `tplink_jetstream` | Tested |
+| TP-Link SG2016P (JetStream) | `tplink_jetstream` | `tplink_jetstream` | Vendor CLI over SSH |
+| Zyxel GS1900-24EP (OpenWrt) | `openwrt` | `linux` | UCI commands over SSH (DSA bridge-vlans) |
 
 Contributions of drivers for other switches are welcome.
 
@@ -233,5 +250,6 @@ switch_abstraction/
 └── drivers/
     ├── __init__.py     # dynamic driver loader
     ├── tplink_jetstream.py  # TP-Link JetStream CLI commands
+    ├── openwrt.py           # OpenWrt UCI commands (DSA bridge-vlans)
     └── DRIVER_INTERFACE.md  # driver contract
 ```

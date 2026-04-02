@@ -48,6 +48,7 @@ Build the CLI command to query a port's current PVID. If not implemented, `Switc
 
 Parse the PVID value from the output of `get_port_pvid_command()`. Returns the PVID as int, or `None` if parsing fails.
 
-## Reference implementation
+## Reference implementations
 
-See [tplink_jetstream.py](tplink_jetstream.py) for a complete implementation for TP-Link JetStream switches (e.g. SG2016P). Netmiko device_type for this driver: `tplink_jetstream`.
+- [tplink_jetstream.py](tplink_jetstream.py) - TP-Link JetStream switches (e.g. SG2016P). Netmiko device_type: `tplink_jetstream`. Uses vendor-specific interactive CLI.
+- [openwrt.py](openwrt.py) - Switches running OpenWrt (e.g. Zyxel GS1900-24EP). Netmiko device_type: `linux`. Uses UCI shell commands over SSH to manage DSA bridge-vlans and PoE. Also exports `ensure_commit_commands()` to batch a final `uci commit` + service reload after multiple port changes.
