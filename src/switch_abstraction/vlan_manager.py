@@ -36,16 +36,30 @@ from switch_abstraction.constants import VLAN_MESH, default_dut_config_path
 logger = logging.getLogger(__name__)
 
 
+def load_config(config_path: Path | str | None = None) -> dict:
+    """Load the full YAML config file.
+
+    Returns the parsed dict containing 'switch' and 'duts' sections.
+    """
+    path = Path(config_path) if config_path else default_dut_config_path()
+    with open(path) as f:
+        return yaml.safe_load(f) or {}
+
+
 def load_dut_map(config_path: Path | str | None = None) -> dict[str, dict]:
     """Load DUT hardware database from a YAML config file.
 
     Returns a dict keyed by DUT name with at least:
         switch_port, switch_vlan_isolated
     """
-    path = Path(config_path) if config_path else default_dut_config_path()
-    with open(path) as f:
-        config = yaml.safe_load(f)
-    return config.get("duts", {})
+    return load_config(config_path).get("duts", {})
+
+
+def get_vlan_mesh(config: dict | None = None) -> int:
+    """Resolve the mesh/topology VLAN from config, falling back to VLAN_MESH constant."""
+    if config:
+        return config.get("switch", {}).get("vlan_topology", VLAN_MESH)
+    return VLAN_MESH
 
 
 def set_port_vlan(
@@ -53,6 +67,7 @@ def set_port_vlan(
     vlan_id: int,
     *,
     dut_map: dict[str, dict] | None = None,
+    config: dict | None = None,
     config_path: Path | str | None = None,
 ) -> bool:
     """Switch a DUT's port to the target VLAN.
@@ -61,12 +76,18 @@ def set_port_vlan(
         dut_name: key in the duts section of config.
         vlan_id: target VLAN (e.g. 200 for mesh, or the isolated VLAN).
         dut_map: pre-loaded DUT map (avoids re-reading YAML per call).
+        config: full parsed config dict (to read vlan_topology).
         config_path: override path to dut-config.yaml.
 
     Returns True on success, False on failure.
     """
+    if config is None and dut_map is None:
+        config = load_config(config_path)
+
     if dut_map is None:
-        dut_map = load_dut_map(config_path)
+        dut_map = config.get("duts", {})
+
+    vlan_mesh = get_vlan_mesh(config)
 
     hw = dut_map.get(dut_name)
     if hw is None:
@@ -77,11 +98,11 @@ def set_port_vlan(
     isolated_vlan = hw["switch_vlan_isolated"]
 
     if vlan_id == isolated_vlan:
-        remove_vlans = [VLAN_MESH]
-    elif vlan_id == VLAN_MESH:
+        remove_vlans = [vlan_mesh]
+    elif vlan_id == vlan_mesh:
         remove_vlans = [isolated_vlan]
     else:
-        remove_vlans = [isolated_vlan, VLAN_MESH]
+        remove_vlans = [isolated_vlan, vlan_mesh]
 
     driver = get_switch_driver()
     cmds = driver.assign_port_vlan_commands(
@@ -109,11 +130,15 @@ def restore_port_vlan(
     dut_name: str,
     *,
     dut_map: dict[str, dict] | None = None,
+    config: dict | None = None,
     config_path: Path | str | None = None,
 ) -> bool:
     """Restore a DUT's port to its default isolated VLAN."""
+    if config is None and dut_map is None:
+        config = load_config(config_path)
+
     if dut_map is None:
-        dut_map = load_dut_map(config_path)
+        dut_map = config.get("duts", {})
 
     hw = dut_map.get(dut_name)
     if hw is None:
@@ -121,7 +146,7 @@ def restore_port_vlan(
         return False
 
     return set_port_vlan(
-        dut_name, hw["switch_vlan_isolated"], dut_map=dut_map,
+        dut_name, hw["switch_vlan_isolated"], dut_map=dut_map, config=config,
     )
 
 
@@ -163,11 +188,13 @@ Examples:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
 
+    config = load_config(parsed.config)
+    dut_map = config.get("duts", {})
+
     if parsed.restore_all:
-        dut_map = load_dut_map(parsed.config)
         all_ok = True
         for name in dut_map:
-            if not restore_port_vlan(name, dut_map=dut_map):
+            if not restore_port_vlan(name, dut_map=dut_map, config=config):
                 all_ok = False
         sys.exit(0 if all_ok else 1)
 
@@ -193,14 +220,13 @@ Examples:
     else:
         dut_names = positional
 
-    dut_map = load_dut_map(parsed.config)
     all_ok = True
     for name in dut_names:
         if parsed.restore:
-            if not restore_port_vlan(name, dut_map=dut_map):
+            if not restore_port_vlan(name, dut_map=dut_map, config=config):
                 all_ok = False
         else:
-            if not set_port_vlan(name, vlan_id, dut_map=dut_map):
+            if not set_port_vlan(name, vlan_id, dut_map=dut_map, config=config):
                 all_ok = False
 
     sys.exit(0 if all_ok else 1)
