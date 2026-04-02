@@ -71,7 +71,7 @@ switch-vlan -v my_router_1 200
 
 ## Library usage
 
-### From pytest fixtures
+### From pytest fixtures (single DUT)
 
 ```python
 from switch_abstraction.vlan_manager import set_port_vlan, restore_port_vlan, load_config
@@ -82,6 +82,31 @@ dut_map = config.get("duts", {})
 set_port_vlan("my_router_1", 200, dut_map=dut_map, config=config)
 # ... run test ...
 restore_port_vlan("my_router_1", dut_map=dut_map, config=config)
+```
+
+### Batch operations (multiple DUTs, single SSH session)
+
+When switching multiple DUTs, use the batch functions to avoid one SSH connection per DUT:
+
+```python
+from switch_abstraction.vlan_manager import (
+    set_ports_vlan_batch, restore_ports_vlan_batch, load_config,
+)
+
+config = load_config()
+dut_map = config.get("duts", {})
+dut_names = ["my_router_1", "my_router_2", "my_router_3"]
+
+set_ports_vlan_batch(dut_names, 200, dut_map=dut_map, config=config)
+# ... run mesh tests ...
+restore_ports_vlan_batch(dut_names, dut_map=dut_map, config=config)
+```
+
+The CLI also batches automatically when multiple DUT names are given:
+
+```bash
+# All three switch in one SSH session
+switch-vlan my_router_1 my_router_2 my_router_3 200
 ```
 
 ### Querying current port VLAN (PVID)
