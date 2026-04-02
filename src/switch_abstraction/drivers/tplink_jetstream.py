@@ -1,9 +1,9 @@
 """
 TP-Link JetStream driver - CLI command builders for TP-Link JetStream switches.
 
-Builds command lists for VLAN presets, hybrid VLAN assignment, PoE control,
+Builds command lists for VLAN assignment, PoE control, PVID queries,
 and dynamic VLAN creation. Commands are specific to the TP-Link JetStream CLI
-(tested on SG2016P) but executed by switch_client.py via Netmiko.
+(tested on SG2016P) but executed by client.py via Netmiko.
 
 Netmiko device_type: "tplink_jetstream"
 """
@@ -11,83 +11,6 @@ Netmiko device_type: "tplink_jetstream"
 from __future__ import annotations
 
 DEVICE_TYPE = "tplink_jetstream"
-
-PRESET_ISOLATED = [
-    (1, ["no switchport general allowed vlan 200", "switchport general allowed vlan 104 untagged", "switchport pvid 104"]),
-    (2, ["no switchport general allowed vlan 200", "switchport general allowed vlan 105 untagged", "switchport pvid 105"]),
-    (3, ["no switchport general allowed vlan 200", "switchport general allowed vlan 106 untagged", "switchport pvid 106"]),
-    (4, ["no switchport general allowed vlan 200"]),
-    (5, ["no switchport general allowed vlan 200"]),
-    (6, ["no switchport general allowed vlan 200"]),
-    (7, ["no switchport general allowed vlan 200"]),
-    (8, ["no switchport general allowed vlan 200"]),
-    (9, ["no switchport general allowed vlan 200", "switchport general allowed vlan 1 untagged", "switchport general allowed vlan 100-108 tagged", "switchport pvid 1"]),
-    (10, ["no switchport general allowed vlan 200", "switchport general allowed vlan 1 untagged", "switchport general allowed vlan 100-108 tagged", "switchport pvid 1"]),
-    (11, ["no switchport general allowed vlan 200", "switchport general allowed vlan 100 untagged", "switchport pvid 100"]),
-    (12, ["no switchport general allowed vlan 200", "switchport general allowed vlan 101 untagged", "switchport pvid 101"]),
-    (13, ["no switchport general allowed vlan 200", "switchport general allowed vlan 102 untagged", "switchport pvid 102"]),
-    (14, ["no switchport general allowed vlan 200", "switchport general allowed vlan 103 untagged", "switchport pvid 103"]),
-    (15, ["no switchport general allowed vlan 200", "switchport general allowed vlan 105 untagged", "switchport pvid 105"]),
-    (16, ["no switchport general allowed vlan 200", "switchport general allowed vlan 104 untagged", "switchport pvid 104"]),
-]
-
-PRESET_MESH = [
-    (1, ["no switchport general allowed vlan 104", "switchport general allowed vlan 200 untagged", "switchport pvid 200"]),
-    (2, ["no switchport general allowed vlan 105", "switchport general allowed vlan 200 untagged", "switchport pvid 200"]),
-    (3, ["no switchport general allowed vlan 106", "switchport general allowed vlan 200 untagged", "switchport pvid 200"]),
-    (4, ["no switchport general allowed vlan 1", "switchport general allowed vlan 200 untagged", "switchport pvid 200"]),
-    (5, ["no switchport general allowed vlan 1", "switchport general allowed vlan 200 untagged", "switchport pvid 200"]),
-    (6, ["no switchport general allowed vlan 1", "switchport general allowed vlan 200 untagged", "switchport pvid 200"]),
-    (7, ["no switchport general allowed vlan 1", "switchport general allowed vlan 200 untagged", "switchport pvid 200"]),
-    (8, ["no switchport general allowed vlan 1", "switchport general allowed vlan 200 untagged", "switchport pvid 200"]),
-    (9, ["switchport general allowed vlan 1 untagged", "switchport general allowed vlan 100-108,200 tagged", "switchport pvid 1"]),
-    (10, ["switchport general allowed vlan 1 untagged", "switchport general allowed vlan 100-108,200 tagged", "switchport pvid 1"]),
-    (11, ["no switchport general allowed vlan 100", "switchport general allowed vlan 200 untagged", "switchport pvid 200"]),
-    (12, ["no switchport general allowed vlan 101", "switchport general allowed vlan 200 untagged", "switchport pvid 200"]),
-    (13, ["no switchport general allowed vlan 102", "switchport general allowed vlan 200 untagged", "switchport pvid 200"]),
-    (14, ["no switchport general allowed vlan 103", "switchport general allowed vlan 200 untagged", "switchport pvid 200"]),
-    (15, ["no switchport general allowed vlan 105", "switchport general allowed vlan 200 untagged", "switchport pvid 200"]),
-    (16, ["no switchport general allowed vlan 104", "switchport general allowed vlan 200 untagged", "switchport pvid 200"]),
-]
-
-PRESETS = {
-    "isolated": (PRESET_ISOLATED, False),
-    "mesh": (PRESET_MESH, True),
-}
-
-VLAN_NAMES: dict[int, str] = {
-    100: "belkin_rt3200_1",
-    101: "belkin_rt3200_2",
-    102: "belkin_rt3200_3",
-    103: "banana-pi-r4",
-    104: "openwrt-one",
-    105: "libre_router_1",
-    106: "libre_router_2",
-}
-
-def build_preset_commands(preset_name: str) -> list[str]:
-    """Build CLI commands for a full VLAN preset (isolated or mesh).
-
-    Raises ValueError if preset_name is not recognized.
-    """
-    if preset_name not in PRESETS:
-        raise ValueError(f"Unknown preset '{preset_name}'. Valid: {list(PRESETS.keys())}")
-
-    preset, create_vlan_200 = PRESETS[preset_name]
-    cmds: list[str] = []
-
-    for vlan_id, name in VLAN_NAMES.items():
-        cmds.extend([f"vlan {vlan_id}", f'name "{name}"', "exit"])
-
-    if create_vlan_200:
-        cmds.extend(["vlan 200", 'name "mesh"', "exit"])
-
-    for port, iface_cmds in preset:
-        cmds.append(f"interface gigabitEthernet 1/0/{port}")
-        cmds.extend(iface_cmds)
-        cmds.append("exit")
-
-    return cmds
 
 
 def build_poe_commands(port: int, action: str) -> list[str]:
@@ -104,6 +27,43 @@ def build_poe_commands(port: int, action: str) -> list[str]:
         f"power inline supply {poe_cmd}",
         "exit",
     ]
+
+
+def assign_port_vlan_commands(
+    port: int,
+    vlan_id: int,
+    mode: str = "untagged",
+    remove_vlans: list[int] | None = None,
+) -> list[str]:
+    """Build CLI commands to assign a port to a VLAN.
+
+    Args:
+        port: switch port number.
+        vlan_id: VLAN to assign.
+        mode: 'untagged' or 'tagged'.
+        remove_vlans: VLANs to remove from the port before assigning.
+    """
+    cmds = [f"interface gigabitEthernet 1/0/{port}"]
+    for vlan in remove_vlans or []:
+        cmds.append(f"no switchport general allowed vlan {vlan}")
+    cmds.append(f"switchport general allowed vlan {vlan_id} {mode}")
+    if mode == "untagged":
+        cmds.append(f"switchport pvid {vlan_id}")
+    cmds.append("exit")
+    return cmds
+
+
+def ensure_vlan_commands(vlan_id: int, name: str | None = None) -> list[str]:
+    """Build CLI commands to create a VLAN if it does not exist.
+
+    The TP-Link CLI is idempotent for 'vlan <id>': it enters VLAN config
+    mode whether the VLAN already exists or not.
+    """
+    cmds = [f"vlan {vlan_id}"]
+    if name:
+        cmds.append(f'name "{name}"')
+    cmds.append("exit")
+    return cmds
 
 
 def build_hybrid_commands(
@@ -132,7 +92,7 @@ def build_hybrid_commands(
     cmds: list[str] = []
 
     if has_libremesh_duts:
-        cmds.extend(["vlan 200", 'name "mesh"', "exit"])
+        cmds.extend([f"vlan {vlan_mesh}", 'name "mesh"', "exit"])
 
     for port, pool, isolated_vlan in port_assignments:
         if ports_to_include is not None and port not in ports_to_include:
@@ -163,38 +123,17 @@ def build_hybrid_commands(
     return cmds
 
 
-def ensure_vlan_commands(vlan_id: int, name: str | None = None) -> list[str]:
-    """Build CLI commands to create a VLAN if it does not exist.
-
-    The TP-Link CLI is idempotent for 'vlan <id>': it enters VLAN config
-    mode whether the VLAN already exists or not.
-    """
-    cmds = [f"vlan {vlan_id}"]
-    if name:
-        cmds.append(f'name "{name}"')
-    cmds.append("exit")
-    return cmds
+def get_port_pvid_command(port: int) -> str:
+    """Build the show command to query a port's PVID."""
+    return f"show interface switchport gigabitEthernet 1/0/{port}"
 
 
-def assign_port_vlan_commands(
-    port: int,
-    vlan_id: int,
-    mode: str = "untagged",
-    remove_vlans: list[int] | None = None,
-) -> list[str]:
-    """Build CLI commands to assign a port to a VLAN.
-
-    Args:
-        port: switch port number.
-        vlan_id: VLAN to assign.
-        mode: 'untagged' or 'tagged'.
-        remove_vlans: VLANs to remove from the port before assigning.
-    """
-    cmds = [f"interface gigabitEthernet 1/0/{port}"]
-    for vlan in remove_vlans or []:
-        cmds.append(f"no switchport general allowed vlan {vlan}")
-    cmds.append(f"switchport general allowed vlan {vlan_id} {mode}")
-    if mode == "untagged":
-        cmds.append(f"switchport pvid {vlan_id}")
-    cmds.append("exit")
-    return cmds
+def parse_port_pvid(output: str) -> int | None:
+    """Parse PVID from TP-Link 'show interface switchport' output."""
+    for line in output.splitlines():
+        if "PVID" in line.upper():
+            parts = line.split()
+            for part in parts:
+                if part.isdigit():
+                    return int(part)
+    return None
