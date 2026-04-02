@@ -150,6 +150,131 @@ def restore_port_vlan(
     )
 
 
+def _build_dut_commands(
+    dut_name: str,
+    vlan_id: int,
+    dut_map: dict[str, dict],
+    vlan_mesh: int,
+) -> list[str] | None:
+    """Build CLI commands for a single DUT VLAN change. Returns None if DUT not found."""
+    hw = dut_map.get(dut_name)
+    if hw is None:
+        logger.error("DUT '%s' not found in config", dut_name)
+        return None
+
+    port = hw["switch_port"]
+    isolated_vlan = hw["switch_vlan_isolated"]
+
+    if vlan_id == isolated_vlan:
+        remove_vlans = [vlan_mesh]
+    elif vlan_id == vlan_mesh:
+        remove_vlans = [isolated_vlan]
+    else:
+        remove_vlans = [isolated_vlan, vlan_mesh]
+
+    driver = get_switch_driver()
+    cmds = driver.assign_port_vlan_commands(
+        port, vlan_id, "untagged", remove_vlans=remove_vlans,
+    )
+
+    extra_port = hw.get("switch_port_poe")
+    if extra_port and extra_port != port:
+        cmds.extend(driver.assign_port_vlan_commands(
+            extra_port, vlan_id, "untagged", remove_vlans=remove_vlans,
+        ))
+    return cmds
+
+
+def set_ports_vlan_batch(
+    dut_names: list[str],
+    vlan_id: int,
+    *,
+    dut_map: dict[str, dict] | None = None,
+    config: dict | None = None,
+    config_path: Path | str | None = None,
+) -> bool:
+    """Switch multiple DUT ports to a VLAN in a single SSH session.
+
+    Collects all CLI commands, sends them in one connection.
+    Returns True if all commands succeed, False on any error.
+    """
+    if config is None and dut_map is None:
+        config = load_config(config_path)
+    if dut_map is None:
+        dut_map = config.get("duts", {})
+
+    vlan_mesh = get_vlan_mesh(config)
+    all_cmds: list[str] = []
+    valid_duts: list[str] = []
+
+    for name in dut_names:
+        cmds = _build_dut_commands(name, vlan_id, dut_map, vlan_mesh)
+        if cmds is None:
+            return False
+        all_cmds.extend(cmds)
+        valid_duts.append(name)
+
+    if not all_cmds:
+        return True
+
+    client = SwitchClient()
+    success = client.send_config_commands(all_cmds)
+
+    if success:
+        for name in valid_duts:
+            port = dut_map[name]["switch_port"]
+            logger.info("DUT '%s' port %d switched to VLAN %d", name, port, vlan_id)
+    else:
+        logger.error("Batch VLAN switch failed for DUTs: %s", valid_duts)
+
+    return success
+
+
+def restore_ports_vlan_batch(
+    dut_names: list[str],
+    *,
+    dut_map: dict[str, dict] | None = None,
+    config: dict | None = None,
+    config_path: Path | str | None = None,
+) -> bool:
+    """Restore multiple DUT ports to their isolated VLANs in a single SSH session."""
+    if config is None and dut_map is None:
+        config = load_config(config_path)
+    if dut_map is None:
+        dut_map = config.get("duts", {})
+
+    vlan_mesh = get_vlan_mesh(config)
+    all_cmds: list[str] = []
+    valid_duts: list[str] = []
+
+    for name in dut_names:
+        hw = dut_map.get(name)
+        if hw is None:
+            logger.error("DUT '%s' not found in config", name)
+            return False
+        cmds = _build_dut_commands(name, hw["switch_vlan_isolated"], dut_map, vlan_mesh)
+        if cmds is None:
+            return False
+        all_cmds.extend(cmds)
+        valid_duts.append(name)
+
+    if not all_cmds:
+        return True
+
+    client = SwitchClient()
+    success = client.send_config_commands(all_cmds)
+
+    if success:
+        for name in valid_duts:
+            port = dut_map[name]["switch_port"]
+            isolated = dut_map[name]["switch_vlan_isolated"]
+            logger.info("DUT '%s' port %d restored to VLAN %d", name, port, isolated)
+    else:
+        logger.error("Batch VLAN restore failed for DUTs: %s", valid_duts)
+
+    return success
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Switch DUT port(s) to a target VLAN",
@@ -192,10 +317,10 @@ Examples:
     dut_map = config.get("duts", {})
 
     if parsed.restore_all:
-        all_ok = True
-        for name in dut_map:
-            if not restore_port_vlan(name, dut_map=dut_map, config=config):
-                all_ok = False
+        all_names = list(dut_map.keys())
+        all_ok = restore_ports_vlan_batch(
+            all_names, dut_map=dut_map, config=config,
+        )
         sys.exit(0 if all_ok else 1)
 
     positional = parsed.args
@@ -220,14 +345,14 @@ Examples:
     else:
         dut_names = positional
 
-    all_ok = True
-    for name in dut_names:
-        if parsed.restore:
-            if not restore_port_vlan(name, dut_map=dut_map, config=config):
-                all_ok = False
-        else:
-            if not set_port_vlan(name, vlan_id, dut_map=dut_map, config=config):
-                all_ok = False
+    if parsed.restore:
+        all_ok = restore_ports_vlan_batch(
+            dut_names, dut_map=dut_map, config=config,
+        )
+    else:
+        all_ok = set_ports_vlan_batch(
+            dut_names, vlan_id, dut_map=dut_map, config=config,
+        )
 
     sys.exit(0 if all_ok else 1)
 

@@ -10,7 +10,9 @@ from switch_abstraction.vlan_manager import (
     load_config,
     load_dut_map,
     restore_port_vlan,
+    restore_ports_vlan_batch,
     set_port_vlan,
+    set_ports_vlan_batch,
 )
 
 __all__ = [
@@ -18,7 +20,9 @@ __all__ = [
     "load_config",
     "load_dut_map",
     "restore_port_vlan",
+    "restore_ports_vlan_batch",
     "set_port_vlan",
+    "set_ports_vlan_batch",
 ]
 
 
