@@ -10,9 +10,9 @@ To add support for a new switch:
 
 ## Required exports
 
-### build_poe_commands(port: int, action: str) -> list[str]
+### `build_poe_commands(port: int, action: str) -> list[str]`
 
-Build CLI commands to enable/disable PoE on a port. Called by `poe_switch_control.py` via `SwitchClient`.
+Build CLI commands to enable/disable PoE on a port.
 
 - **port**: Switch port number (1-based).
 - **action**: `"on"` or `"off"`.
@@ -21,32 +21,32 @@ Build CLI commands to enable/disable PoE on a port. Called by `poe_switch_contro
 
 For switches without PoE, return an empty list or idempotent no-op commands.
 
-### assign_port_vlan_commands(port, vlan_id, mode, remove_vlans) -> list[str]
+### `assign_port_vlan_commands(port, vlan_id, mode, remove_vlans) -> list[str]`
 
-Build CLI commands to assign a port to a VLAN. Called by `vlan_manager.py` for per-DUT dynamic VLAN switching.
+Build CLI commands to assign a port to a VLAN.
 
 - **port**: Switch port number.
 - **vlan_id**: VLAN to assign.
 - **mode**: `"untagged"` or `"tagged"`.
 - **remove_vlans**: VLANs to remove from the port before assigning.
 
-### ensure_vlan_commands(vlan_id: int, name: str | None = None) -> list[str]
+### `ensure_vlan_commands(vlan_id: int, name: str | None = None) -> list[str]`
 
 Build CLI commands to create a VLAN if it does not exist. Optional; used for dynamic VLAN creation.
 
-## Optional exports (legacy)
+### `build_hybrid_commands(port_assignments, ...) -> list[str]`
 
-### PRESETS (dict)
+Build CLI commands for hybrid VLAN assignment (mixed isolated + mesh topology). Used by pool-manager for batch reconfiguration.
 
-Dictionary mapping preset names to definitions. Used by legacy `switch_vlan_preset.py`.
+## Optional exports
 
-### build_preset_commands(preset_name: str) -> list[str]
+### `get_port_pvid_command(port: int) -> str`
 
-Build CLI commands for a full VLAN preset (isolated or mesh). Legacy - used by `switch_vlan_preset.py`.
+Build the CLI command to query a port's current PVID. If not implemented, `SwitchClient.get_port_pvid()` will not work for that driver.
 
-### build_hybrid_commands(port_assignments, ...) -> list[str]
+### `parse_port_pvid(output: str) -> int | None`
 
-Build CLI commands for hybrid VLAN assignment. Legacy - used by `pool-manager.py`.
+Parse the PVID value from the output of `get_port_pvid_command()`. Returns the PVID as int, or `None` if parsing fails.
 
 ## Reference implementation
 
