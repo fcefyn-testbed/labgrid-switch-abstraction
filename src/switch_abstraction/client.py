@@ -19,7 +19,8 @@ import logging
 import os
 import time
 from contextlib import contextmanager
-from typing import Generator
+from types import ModuleType
+from typing import Generator, Mapping
 
 from switch_abstraction.constants import (
     DEFAULT_SWITCH_HOST,
@@ -31,48 +32,100 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_DEVICE_TYPE = "tplink_jetstream"
 
-LOCK_PATH = "/tmp/switch.lock"
-LOCK_TIMEOUT = 60
+DEFAULT_LOCK_PATH = "/tmp/switch.lock"
+DEFAULT_LOCK_TIMEOUT = 60.0
 
 
-def _open_lock_file():
+class SwitchLockTimeoutError(TimeoutError):
+    """Raised when the switch lock cannot be acquired in time."""
+
+
+def _config_value(
+    config: Mapping[str, object] | None,
+    *keys: str,
+) -> str | None:
+    """Return the first non-empty string-like config value for the given keys."""
+    if config is None:
+        return None
+    for key in keys:
+        value = config.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return None
+
+
+def get_lock_path() -> str:
+    """Return the lock path from env or the built-in default."""
+    return os.environ.get("SWITCH_LOCK_PATH", DEFAULT_LOCK_PATH)
+
+
+def get_lock_timeout() -> float:
+    """Return the lock timeout from env or the built-in default."""
+    raw = os.environ.get("SWITCH_LOCK_TIMEOUT")
+    if raw is None:
+        return DEFAULT_LOCK_TIMEOUT
+    try:
+        timeout = float(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid SWITCH_LOCK_TIMEOUT=%r, using default %.1fs",
+            raw,
+            DEFAULT_LOCK_TIMEOUT,
+        )
+        return DEFAULT_LOCK_TIMEOUT
+    if timeout < 0:
+        logger.warning(
+            "Negative SWITCH_LOCK_TIMEOUT=%r, using default %.1fs",
+            raw,
+            DEFAULT_LOCK_TIMEOUT,
+        )
+        return DEFAULT_LOCK_TIMEOUT
+    return timeout
+
+
+def _open_lock_file(lock_path: str):
     """Open lock file for flock. Creates with 0o666 to allow any user to open it."""
     try:
-        return os.open(LOCK_PATH, os.O_CREAT | os.O_RDWR, 0o666)
+        return os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o666)
     except PermissionError:
-        if os.path.exists(LOCK_PATH):
+        if os.path.exists(lock_path):
             try:
-                os.chmod(LOCK_PATH, 0o666)
-                return os.open(LOCK_PATH, os.O_RDWR)
+                os.chmod(lock_path, 0o666)
+                return os.open(lock_path, os.O_RDWR)
             except (PermissionError, OSError) as e:
                 raise PermissionError(
-                    f"Cannot access lock file {LOCK_PATH}. "
-                    f"If it was created by root, run: sudo chmod 666 {LOCK_PATH}"
+                    f"Cannot access lock file {lock_path}. "
+                    f"If it was created by root, run: sudo chmod 666 {lock_path}"
                 ) from e
         raise
 
 
 @contextmanager
-def switch_lock(timeout: float = LOCK_TIMEOUT) -> Generator[bool, None, None]:
+def switch_lock(
+    timeout: float | None = None,
+    lock_path: str | None = None,
+) -> Generator[None, None, None]:
     """Acquire exclusive lock to serialize SSH sessions to the switch."""
     lock_fd = None
+    resolved_timeout = get_lock_timeout() if timeout is None else timeout
+    resolved_lock_path = get_lock_path() if lock_path is None else lock_path
     try:
-        lock_fd = _open_lock_file()
-        deadline = time.time() + timeout
-        acquired = False
-        while time.time() < deadline:
+        lock_fd = _open_lock_file(resolved_lock_path)
+        deadline = time.time() + resolved_timeout
+        while True:
             try:
                 fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                acquired = True
                 logger.debug("Acquired switch lock")
                 break
             except BlockingIOError:
+                if time.time() >= deadline:
+                    raise SwitchLockTimeoutError(
+                        f"Timed out after {resolved_timeout:.1f}s waiting for switch lock "
+                        f"at {resolved_lock_path}"
+                    )
                 time.sleep(0.1)
 
-        if not acquired:
-            logger.warning("Lock timeout after %ds, proceeding anyway", timeout)
-
-        yield acquired
+        yield
     finally:
         if lock_fd is not None:
             try:
@@ -129,13 +182,21 @@ def load_switch_password() -> str:
     return os.environ.get("SWITCH_PASSWORD") or config.get("SWITCH_PASSWORD", "")
 
 
-def get_switch_driver():
+def get_switch_driver(
+    name: str | None = None,
+    *,
+    config: Mapping[str, object] | None = None,
+):
     """Load the configured driver module from drivers/."""
     from switch_abstraction.drivers import get_driver
 
-    config = load_config()
-    name = config.get("SWITCH_DRIVER", "tplink_jetstream")
-    return get_driver(name)
+    resolved_name = (
+        name
+        or os.environ.get("SWITCH_DRIVER")
+        or _config_value(config, "driver", "SWITCH_DRIVER")
+        or load_config().get("SWITCH_DRIVER", "tplink_jetstream")
+    )
+    return get_driver(resolved_name)
 
 
 def get_credentials(
@@ -143,14 +204,36 @@ def get_credentials(
     user: str | None = None,
     password: str | None = None,
     device_type: str | None = None,
+    *,
+    config: Mapping[str, object] | None = None,
 ) -> dict[str, str]:
     """Build a credentials dict, filling gaps from config/env."""
-    config = load_config()
+    resolved_config: Mapping[str, object] = config or load_config()
     return {
-        "host": host or os.environ.get("SWITCH_HOST") or config.get("SWITCH_HOST", DEFAULT_SWITCH_HOST),
-        "user": user or os.environ.get("SWITCH_USER") or config.get("SWITCH_USER", DEFAULT_SWITCH_USER),
-        "password": password or os.environ.get("SWITCH_PASSWORD") or config.get("SWITCH_PASSWORD", ""),
-        "device_type": device_type or config.get("SWITCH_DEVICE_TYPE", DEFAULT_DEVICE_TYPE),
+        "host": (
+            host
+            or os.environ.get("SWITCH_HOST")
+            or _config_value(resolved_config, "host", "SWITCH_HOST")
+            or DEFAULT_SWITCH_HOST
+        ),
+        "user": (
+            user
+            or os.environ.get("SWITCH_USER")
+            or _config_value(resolved_config, "user", "SWITCH_USER")
+            or DEFAULT_SWITCH_USER
+        ),
+        "password": (
+            password
+            or os.environ.get("SWITCH_PASSWORD")
+            or _config_value(resolved_config, "password", "SWITCH_PASSWORD")
+            or ""
+        ),
+        "device_type": (
+            device_type
+            or os.environ.get("SWITCH_DEVICE_TYPE")
+            or _config_value(resolved_config, "device_type", "SWITCH_DEVICE_TYPE")
+            or DEFAULT_DEVICE_TYPE
+        ),
     }
 
 
@@ -167,12 +250,32 @@ class SwitchClient:
         user: str | None = None,
         password: str | None = None,
         device_type: str | None = None,
+        *,
+        config: Mapping[str, object] | None = None,
+        driver: ModuleType | None = None,
+        driver_name: str | None = None,
     ):
-        creds = get_credentials(host, user, password, device_type)
+        resolved_config = load_config()
+        if config:
+            resolved_config.update(
+                {
+                    key: value
+                    for key, value in config.items()
+                    if value not in (None, "")
+                }
+            )
+        creds = get_credentials(
+            host,
+            user,
+            password,
+            device_type,
+            config=resolved_config,
+        )
         self.host = creds["host"]
         self.user = creds["user"]
         self.password = creds["password"]
         self.device_type = creds["device_type"]
+        self.driver = driver or get_switch_driver(driver_name, config=resolved_config)
 
         if not self.password:
             raise ValueError(
@@ -198,44 +301,55 @@ class SwitchClient:
             logger.info("No commands to send, skipping SSH session")
             return True
 
-        with switch_lock():
-            try:
-                conn = self._connect()
-            except Exception as e:
-                logger.error("SSH connection to switch failed: %s", e)
-                return False
+        try:
+            with switch_lock():
+                try:
+                    conn = self._connect()
+                except Exception as e:
+                    logger.error("SSH connection to switch failed: %s", e)
+                    return False
 
-            try:
-                output = conn.send_config_set(
-                    commands,
-                    cmd_verify=False,
-                )
-                logger.debug("Switch output:\n%s", output)
-                logger.info("Switch configuration applied successfully (%d commands)", len(commands))
-                return True
-            except Exception as e:
-                logger.error("Switch command execution failed: %s", e)
-                return False
-            finally:
-                conn.disconnect()
+                try:
+                    output = conn.send_config_set(
+                        commands,
+                        cmd_verify=False,
+                    )
+                    logger.debug("Switch output:\n%s", output)
+                    logger.info(
+                        "Switch configuration applied successfully (%d commands)",
+                        len(commands),
+                    )
+                    return True
+                except Exception as e:
+                    logger.error("Switch command execution failed: %s", e)
+                    return False
+                finally:
+                    conn.disconnect()
+        except SwitchLockTimeoutError as e:
+            logger.error("%s", e)
+            return False
 
     def send_command(self, command: str) -> str | None:
         """Send a single show command and return output, or None on failure."""
-        with switch_lock():
-            try:
-                conn = self._connect()
-            except Exception as e:
-                logger.error("SSH connection to switch failed: %s", e)
-                return None
+        try:
+            with switch_lock():
+                try:
+                    conn = self._connect()
+                except Exception as e:
+                    logger.error("SSH connection to switch failed: %s", e)
+                    return None
 
-            try:
-                output = conn.send_command(command)
-                return output
-            except Exception as e:
-                logger.error("Switch command failed: %s", e)
-                return None
-            finally:
-                conn.disconnect()
+                try:
+                    output = conn.send_command(command)
+                    return output
+                except Exception as e:
+                    logger.error("Switch command failed: %s", e)
+                    return None
+                finally:
+                    conn.disconnect()
+        except SwitchLockTimeoutError as e:
+            logger.error("%s", e)
+            return None
 
     def get_port_pvid(self, port: int) -> int | None:
         """Query the switch for the current PVID of a port.
@@ -243,12 +357,20 @@ class SwitchClient:
         Returns the PVID as int, or None on failure.
         Delegates command building and output parsing to the active driver.
         """
-        driver = get_switch_driver()
-        cmd = driver.get_port_pvid_command(port)
+        if not hasattr(self.driver, "get_port_pvid_command") or not hasattr(
+            self.driver, "parse_port_pvid"
+        ):
+            logger.error(
+                "Active driver %s does not support PVID queries",
+                getattr(self.driver, "__name__", self.driver),
+            )
+            return None
+
+        cmd = self.driver.get_port_pvid_command(port)
         output = self.send_command(cmd)
         if output is None:
             return None
-        pvid = driver.parse_port_pvid(output)
+        pvid = self.driver.parse_port_pvid(output)
         if pvid is None:
             logger.warning("Could not parse PVID from switch output for port %d", port)
         return pvid
@@ -267,10 +389,9 @@ class SwitchClient:
 
     def poe_on_multi(self, ports: list[int]) -> bool:
         """Enable PoE on one or more switch ports in a single SSH session."""
-        driver = get_switch_driver()
         cmds: list[str] = []
         for port in ports:
-            cmds.extend(driver.build_poe_commands(port, "on"))
+            cmds.extend(self.driver.build_poe_commands(port, "on"))
         success = self.send_config_commands(cmds)
         if success:
             logger.info("PoE enabled on port(s) %s", ports)
@@ -278,10 +399,9 @@ class SwitchClient:
 
     def poe_off_multi(self, ports: list[int]) -> bool:
         """Disable PoE on one or more switch ports in a single SSH session."""
-        driver = get_switch_driver()
         cmds: list[str] = []
         for port in ports:
-            cmds.extend(driver.build_poe_commands(port, "off"))
+            cmds.extend(self.driver.build_poe_commands(port, "off"))
         success = self.send_config_commands(cmds)
         if success:
             logger.info("PoE disabled on port(s) %s", ports)
@@ -289,30 +409,33 @@ class SwitchClient:
 
     def poe_cycle_multi(self, ports: list[int], delay_sec: float = 3.0) -> bool:
         """Power cycle one or more PoE ports: off all, wait, on all."""
-        driver = get_switch_driver()
         off_cmds: list[str] = []
         on_cmds: list[str] = []
         for port in ports:
-            off_cmds.extend(driver.build_poe_commands(port, "off"))
-            on_cmds.extend(driver.build_poe_commands(port, "on"))
+            off_cmds.extend(self.driver.build_poe_commands(port, "off"))
+            on_cmds.extend(self.driver.build_poe_commands(port, "on"))
 
-        with switch_lock():
-            try:
-                conn = self._connect()
-            except Exception as e:
-                logger.error("SSH connection to switch failed: %s", e)
-                return False
+        try:
+            with switch_lock():
+                try:
+                    conn = self._connect()
+                except Exception as e:
+                    logger.error("SSH connection to switch failed: %s", e)
+                    return False
 
-            try:
-                conn.send_config_set(off_cmds, cmd_verify=False)
-                logger.info("PoE off on port(s) %s, waiting %.1fs", ports, delay_sec)
-                time.sleep(delay_sec)
+                try:
+                    conn.send_config_set(off_cmds, cmd_verify=False)
+                    logger.info("PoE off on port(s) %s, waiting %.1fs", ports, delay_sec)
+                    time.sleep(delay_sec)
 
-                conn.send_config_set(on_cmds, cmd_verify=False)
-                logger.info("PoE cycle on port(s) %s completed successfully", ports)
-                return True
-            except Exception as e:
-                logger.error("PoE cycle failed on port(s) %s: %s", ports, e)
-                return False
-            finally:
-                conn.disconnect()
+                    conn.send_config_set(on_cmds, cmd_verify=False)
+                    logger.info("PoE cycle on port(s) %s completed successfully", ports)
+                    return True
+                except Exception as e:
+                    logger.error("PoE cycle failed on port(s) %s: %s", ports, e)
+                    return False
+                finally:
+                    conn.disconnect()
+        except SwitchLockTimeoutError as e:
+            logger.error("%s", e)
+            return False
