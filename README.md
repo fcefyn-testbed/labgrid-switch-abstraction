@@ -47,7 +47,7 @@ duts:
     pool: "shared"
 EOF
 
-# 4. Verify - restore all DUTs to their default isolated VLANs
+# 4. Verify - restore all DUTs to their configured default pools
 switch-vlan --restore-all
 ```
 
@@ -60,10 +60,10 @@ switch-vlan my_router_1 200
 # Switch multiple DUTs at once
 switch-vlan my_router_1 my_router_2 200
 
-# Restore one DUT to its default isolated VLAN
+# Restore one DUT to its configured default pool
 switch-vlan my_router_1 --restore
 
-# Restore all DUTs
+# Restore all DUTs to their configured default pools
 switch-vlan --restore-all
 
 # Use a custom config path
@@ -159,7 +159,7 @@ Each key is a DUT name (must match Labgrid place names). Fields:
 |---|---|---|
 | `switch_port` | yes | Physical switch port the DUT is connected to |
 | `switch_vlan_isolated` | yes | Dedicated VLAN for this DUT when in isolated mode |
-| `pool` | no | `"isolated"` or `"shared"` - determines the default network pool |
+| `pool` | no | `"isolated"` or `"shared"` - determines the default network pool used by `--restore` and `restore_*`. Defaults to `"isolated"` if omitted |
 | `switch_port_poe` | no | Separate PoE port if different from `switch_port` |
 
 #### Full example
@@ -186,6 +186,10 @@ duts:
     switch_vlan_isolated: 104
     pool: "isolated"
 ```
+
+If `pool: "shared"` is set for a DUT, `switch-vlan --restore` and the
+`restore_port_vlan()` / `restore_ports_vlan_batch()` library helpers restore
+that DUT to `switch.vlan_topology` instead of `switch_vlan_isolated`.
 
 ## Environment variables
 

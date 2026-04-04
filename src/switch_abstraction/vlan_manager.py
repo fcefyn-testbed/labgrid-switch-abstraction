@@ -35,6 +35,8 @@ from switch_abstraction.constants import VLAN_MESH, default_dut_config_path
 
 logger = logging.getLogger(__name__)
 
+VALID_POOLS = {"isolated", "shared"}
+
 
 def load_config(config_path: Path | str | None = None) -> dict:
     """Load the full YAML config file.
@@ -60,6 +62,32 @@ def get_vlan_mesh(config: dict | None = None) -> int:
     if config:
         return config.get("switch", {}).get("vlan_topology", VLAN_MESH)
     return VLAN_MESH
+
+
+def get_default_pool(hw: dict) -> str:
+    """Return the configured default pool for a DUT.
+
+    Missing `pool` defaults to `isolated` for backward compatibility.
+    """
+    pool = str(hw.get("pool", "isolated")).strip().lower()
+    if pool not in VALID_POOLS:
+        raise ValueError(
+            f"Invalid pool value {pool!r}. Expected 'isolated' or 'shared'."
+        )
+    return pool
+
+
+def get_default_vlan(
+    dut_name: str,
+    hw: dict,
+    *,
+    config: dict | None = None,
+) -> int:
+    """Resolve the default VLAN for a DUT based on its configured pool."""
+    pool = get_default_pool(hw)
+    if pool == "shared":
+        return get_vlan_mesh(config)
+    return hw["switch_vlan_isolated"]
 
 
 def set_port_vlan(
@@ -133,7 +161,7 @@ def restore_port_vlan(
     config: dict | None = None,
     config_path: Path | str | None = None,
 ) -> bool:
-    """Restore a DUT's port to its default isolated VLAN."""
+    """Restore a DUT's port to its configured default pool."""
     if config is None and dut_map is None:
         config = load_config(config_path)
 
@@ -145,8 +173,9 @@ def restore_port_vlan(
         logger.error("DUT '%s' not found in config", dut_name)
         return False
 
+    default_vlan = get_default_vlan(dut_name, hw, config=config)
     return set_port_vlan(
-        dut_name, hw["switch_vlan_isolated"], dut_map=dut_map, config=config,
+        dut_name, default_vlan, dut_map=dut_map, config=config,
     )
 
 
@@ -237,7 +266,7 @@ def restore_ports_vlan_batch(
     config: dict | None = None,
     config_path: Path | str | None = None,
 ) -> bool:
-    """Restore multiple DUT ports to their isolated VLANs in a single SSH session."""
+    """Restore multiple DUT ports to their configured default pools in one SSH session."""
     if config is None and dut_map is None:
         config = load_config(config_path)
     if dut_map is None:
@@ -252,7 +281,8 @@ def restore_ports_vlan_batch(
         if hw is None:
             logger.error("DUT '%s' not found in config", name)
             return False
-        cmds = _build_dut_commands(name, hw["switch_vlan_isolated"], dut_map, vlan_mesh)
+        default_vlan = get_default_vlan(name, hw, config=config)
+        cmds = _build_dut_commands(name, default_vlan, dut_map, vlan_mesh)
         if cmds is None:
             return False
         all_cmds.extend(cmds)
@@ -267,8 +297,8 @@ def restore_ports_vlan_batch(
     if success:
         for name in valid_duts:
             port = dut_map[name]["switch_port"]
-            isolated = dut_map[name]["switch_vlan_isolated"]
-            logger.info("DUT '%s' port %d restored to VLAN %d", name, port, isolated)
+            default_vlan = get_default_vlan(name, dut_map[name], config=config)
+            logger.info("DUT '%s' port %d restored to VLAN %d", name, port, default_vlan)
     else:
         logger.error("Batch VLAN restore failed for DUTs: %s", valid_duts)
 
