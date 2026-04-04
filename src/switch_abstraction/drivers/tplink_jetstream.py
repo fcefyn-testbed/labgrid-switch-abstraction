@@ -13,6 +13,16 @@ from __future__ import annotations
 DEVICE_TYPE = "tplink_jetstream"
 
 
+def _normalize_pool(pool: str) -> str:
+    """Validate and normalize a pool value."""
+    normalized = pool.strip().lower()
+    if normalized not in {"isolated", "shared"}:
+        raise ValueError(
+            f"Invalid pool value {pool!r}. Expected 'isolated' or 'shared'."
+        )
+    return normalized
+
+
 def build_poe_commands(port: int, action: str) -> list[str]:
     """Build CLI commands to enable/disable PoE on a port.
 
@@ -69,7 +79,7 @@ def ensure_vlan_commands(vlan_id: int, name: str | None = None) -> list[str]:
 def build_hybrid_commands(
     port_assignments: list[tuple[int, str, int]],
     active_isolated_vlans: set[int],
-    has_libremesh_duts: bool,
+    has_shared_duts: bool,
     uplink_ports: list[int],
     vlan_mesh: int = 200,
     ports_to_include: set[int] | None = None,
@@ -82,23 +92,23 @@ def build_hybrid_commands(
 
     Args:
         port_assignments: list of (port, pool, isolated_vlan) tuples.
-        active_isolated_vlans: set of VLAN IDs used by openwrt-pool DUTs.
-        has_libremesh_duts: whether any DUT is in the libremesh pool.
+        active_isolated_vlans: set of VLAN IDs used by isolated-pool DUTs.
+        has_shared_duts: whether any DUT is in the shared pool.
         uplink_ports: ports that carry tagged traffic to the host.
-        vlan_mesh: VLAN ID for the mesh network.
+        vlan_mesh: VLAN ID for the shared network.
         ports_to_include: if set, only these ports are configured (differential apply).
         include_uplinks: if False, uplink port config is skipped.
     """
     cmds: list[str] = []
 
-    if has_libremesh_duts:
-        cmds.extend([f"vlan {vlan_mesh}", 'name "mesh"', "exit"])
+    if has_shared_duts:
+        cmds.extend([f"vlan {vlan_mesh}", 'name "shared"', "exit"])
 
     for port, pool, isolated_vlan in port_assignments:
         if ports_to_include is not None and port not in ports_to_include:
             continue
         cmds.append(f"interface gigabitEthernet 1/0/{port}")
-        if pool == "isolated":
+        if _normalize_pool(pool) == "isolated":
             cmds.append(f"no switchport general allowed vlan {vlan_mesh}")
             cmds.append(f"switchport general allowed vlan {isolated_vlan} untagged")
             cmds.append(f"switchport pvid {isolated_vlan}")
@@ -110,7 +120,7 @@ def build_hybrid_commands(
 
     if include_uplinks and uplink_ports:
         all_vlans = sorted(active_isolated_vlans)
-        if has_libremesh_duts:
+        if has_shared_duts:
             all_vlans.append(vlan_mesh)
         all_vlans = sorted(set(all_vlans))
         if all_vlans:

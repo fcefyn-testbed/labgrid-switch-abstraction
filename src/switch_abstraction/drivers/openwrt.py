@@ -36,6 +36,16 @@ def _port_name(port: int) -> str:
     return f"lan{port}"
 
 
+def _normalize_pool(pool: str) -> str:
+    """Validate and normalize a pool value."""
+    normalized = pool.strip().lower()
+    if normalized not in {"isolated", "shared"}:
+        raise ValueError(
+            f"Invalid pool value {pool!r}. Expected 'isolated' or 'shared'."
+        )
+    return normalized
+
+
 def build_poe_commands(port: int, action: str) -> list[str]:
     """Build UCI commands to enable/disable PoE on a port.
 
@@ -128,7 +138,7 @@ def ensure_commit_commands() -> list[str]:
 def build_hybrid_commands(
     port_assignments: list[tuple[int, str, int]],
     active_isolated_vlans: set[int],
-    has_libremesh_duts: bool,
+    has_shared_duts: bool,
     uplink_ports: list[int],
     vlan_mesh: int = 200,
     ports_to_include: set[int] | None = None,
@@ -141,13 +151,13 @@ def build_hybrid_commands(
     """
     cmds: list[str] = []
 
-    if has_libremesh_duts:
+    if has_shared_duts:
         cmds.extend(ensure_vlan_commands(vlan_mesh))
 
     for port, pool, isolated_vlan in port_assignments:
         if ports_to_include is not None and port not in ports_to_include:
             continue
-        if pool == "isolated":
+        if _normalize_pool(pool) == "isolated":
             cmds.extend(assign_port_vlan_commands(
                 port, isolated_vlan, "untagged", remove_vlans=[vlan_mesh],
             ))
@@ -158,7 +168,7 @@ def build_hybrid_commands(
 
     if include_uplinks and uplink_ports:
         all_vlans = sorted(active_isolated_vlans)
-        if has_libremesh_duts:
+        if has_shared_duts:
             all_vlans.append(vlan_mesh)
         all_vlans = sorted(set(all_vlans))
         for vlan in all_vlans:
