@@ -36,7 +36,7 @@ Build CLI commands to create a VLAN if it does not exist. Optional; used for dyn
 
 ### `build_hybrid_commands(port_assignments, ...) -> list[str]`
 
-Build CLI commands for hybrid VLAN assignment (mixed isolated + mesh topology). Used by pool-manager for batch reconfiguration.
+Build CLI commands for hybrid VLAN assignment (mixed isolated + shared topology). Used by a higher-level pool manager for batch reconfiguration.
 
 ## Optional exports
 

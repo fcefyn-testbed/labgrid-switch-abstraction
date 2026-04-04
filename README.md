@@ -2,7 +2,7 @@
 
 Vendor-agnostic switch management for [Labgrid](https://labgrid.readthedocs.io/) testbeds. Provides dynamic per-port VLAN switching for hardware-in-the-loop test environments.
 
-Analogous to [PDUDaemon](https://github.com/pdudaemon/pdudaemon) for power control, this package handles **network topology control**: reassigning DUT switch ports between isolated VLANs (one DUT per VLAN, used by openwrt-tests) and a shared mesh VLAN (multiple DUTs on the same VLAN, used by libremesh-tests).
+Analogous to [PDUDaemon](https://github.com/pdudaemon/pdudaemon) for power control, this package handles **network topology control**: reassigning DUT switch ports between isolated VLANs (one DUT per VLAN) and a shared VLAN (multiple DUTs on the same VLAN).
 
 Switch-specific CLI commands are delegated to **driver modules** (pluggable, one per vendor). SSH connections use [Netmiko](https://github.com/ktbyers/netmiko).
 
@@ -44,7 +44,7 @@ duts:
   my_router_2:
     switch_port: 2
     switch_vlan_isolated: 102
-    pool: "libremesh"
+    pool: "shared"
 EOF
 
 # 4. Verify - restore all DUTs to their default isolated VLANs
@@ -102,7 +102,7 @@ dut_map = config.get("duts", {})
 dut_names = ["my_router_1", "my_router_2", "my_router_3"]
 
 set_ports_vlan_batch(dut_names, 200, dut_map=dut_map, config=config)
-# ... run mesh tests ...
+# ... run shared-network tests ...
 restore_ports_vlan_batch(dut_names, dut_map=dut_map, config=config)
 ```
 
@@ -149,7 +149,7 @@ Default path: `/etc/testbed/dut-config.yaml` (override with `SWITCH_DUT_CONFIG` 
 | `host` | no | from `switch.conf` | Switch management IP |
 | `user` | no | from `switch.conf` | SSH username |
 | `uplink_ports` | yes | - | Ports carrying tagged traffic to the lab host (list of ints) |
-| `vlan_topology` | no | `200` | VLAN ID for the shared mesh/topology network |
+| `vlan_topology` | no | `200` | VLAN ID for the shared/topology network |
 
 #### `duts` section
 
@@ -159,7 +159,7 @@ Each key is a DUT name (must match Labgrid place names). Fields:
 |---|---|---|
 | `switch_port` | yes | Physical switch port the DUT is connected to |
 | `switch_vlan_isolated` | yes | Dedicated VLAN for this DUT when in isolated mode |
-| `pool` | no | `"isolated"` or `"libremesh"` - determines default VLAN pool |
+| `pool` | no | `"isolated"` or `"shared"` - determines the default network pool. Legacy value `"libremesh"` is accepted as an alias for `"shared"` |
 | `switch_port_poe` | no | Separate PoE port if different from `switch_port` |
 
 #### Full example
@@ -179,7 +179,7 @@ duts:
   belkin_rt3200_2:
     switch_port: 2
     switch_vlan_isolated: 102
-    pool: "libremesh"
+    pool: "shared"
     switch_port_poe: 3
   tplink_wdr3500_1:
     switch_port: 4
