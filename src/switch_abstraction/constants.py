@@ -10,7 +10,7 @@ from pathlib import Path
 
 # -- VLAN defaults ------------------------------------------------------------
 
-VLAN_MESH = 200
+VLAN_SHARED = 200
 
 # -- Switch defaults ----------------------------------------------------------
 
