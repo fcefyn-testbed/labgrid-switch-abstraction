@@ -159,7 +159,7 @@ Each key is a DUT name (must match Labgrid place names). Fields:
 |---|---|---|
 | `switch_port` | yes | Physical switch port the DUT is connected to |
 | `switch_vlan_isolated` | yes | Dedicated VLAN for this DUT when in isolated mode |
-| `pool` | no | `"isolated"` or `"shared"` - determines the default network pool. Legacy value `"libremesh"` is accepted as an alias for `"shared"` |
+| `pool` | no | `"isolated"` or `"shared"` - determines the default network pool |
 | `switch_port_poe` | no | Separate PoE port if different from `switch_port` |
 
 #### Full example
