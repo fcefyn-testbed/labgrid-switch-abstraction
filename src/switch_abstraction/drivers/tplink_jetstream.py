@@ -76,12 +76,17 @@ def ensure_vlan_commands(vlan_id: int, name: str | None = None) -> list[str]:
     return cmds
 
 
+def finalize_vlan_commands() -> list[str]:
+    """Return any extra commands needed to apply VLAN changes."""
+    return []
+
+
 def build_hybrid_commands(
     port_assignments: list[tuple[int, str, int]],
     active_isolated_vlans: set[int],
     has_shared_duts: bool,
     uplink_ports: list[int],
-    vlan_mesh: int = 200,
+    vlan_shared: int = 200,
     ports_to_include: set[int] | None = None,
     include_uplinks: bool = True,
 ) -> list[str]:
@@ -95,33 +100,33 @@ def build_hybrid_commands(
         active_isolated_vlans: set of VLAN IDs used by isolated-pool DUTs.
         has_shared_duts: whether any DUT is in the shared pool.
         uplink_ports: ports that carry tagged traffic to the host.
-        vlan_mesh: VLAN ID for the shared network.
+        vlan_shared: VLAN ID for the shared network.
         ports_to_include: if set, only these ports are configured (differential apply).
         include_uplinks: if False, uplink port config is skipped.
     """
     cmds: list[str] = []
 
     if has_shared_duts:
-        cmds.extend([f"vlan {vlan_mesh}", 'name "shared"', "exit"])
+        cmds.extend([f"vlan {vlan_shared}", 'name "shared"', "exit"])
 
     for port, pool, isolated_vlan in port_assignments:
         if ports_to_include is not None and port not in ports_to_include:
             continue
         cmds.append(f"interface gigabitEthernet 1/0/{port}")
         if _normalize_pool(pool) == "isolated":
-            cmds.append(f"no switchport general allowed vlan {vlan_mesh}")
+            cmds.append(f"no switchport general allowed vlan {vlan_shared}")
             cmds.append(f"switchport general allowed vlan {isolated_vlan} untagged")
             cmds.append(f"switchport pvid {isolated_vlan}")
         else:
             cmds.append(f"no switchport general allowed vlan {isolated_vlan}")
-            cmds.append(f"switchport general allowed vlan {vlan_mesh} untagged")
-            cmds.append(f"switchport pvid {vlan_mesh}")
+            cmds.append(f"switchport general allowed vlan {vlan_shared} untagged")
+            cmds.append(f"switchport pvid {vlan_shared}")
         cmds.append("exit")
 
     if include_uplinks and uplink_ports:
         all_vlans = sorted(active_isolated_vlans)
         if has_shared_duts:
-            all_vlans.append(vlan_mesh)
+            all_vlans.append(vlan_shared)
         all_vlans = sorted(set(all_vlans))
         if all_vlans:
             vlan_str = ",".join(str(v) for v in all_vlans)

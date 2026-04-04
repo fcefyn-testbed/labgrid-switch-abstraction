@@ -77,9 +77,8 @@ def assign_port_vlan_commands(
 
     For each VLAN to remove, deletes the port from that bridge-vlan section.
     Then adds the port to the target VLAN section.
-    A final 'uci commit network' and service reload is NOT included here
-    so that multiple port changes can be batched before a single commit.
-    Use ensure_commit_commands() after all port changes.
+    Final apply/commit steps are intentionally omitted here so that multiple
+    port changes can be batched before a single call to finalize_vlan_commands().
     """
     name = _port_name(port)
     port_entry = name if mode == "untagged" else f"{name}{UPLINK_SUFFIX}"
@@ -124,11 +123,8 @@ def ensure_vlan_commands(vlan_id: int, name: str | None = None) -> list[str]:
     return cmds
 
 
-def ensure_commit_commands() -> list[str]:
-    """Build commands to commit UCI changes and reload the network service.
-
-    Call this once after batching all VLAN changes.
-    """
+def finalize_vlan_commands() -> list[str]:
+    """Return the extra commands needed to apply pending VLAN changes."""
     return [
         "uci commit network",
         "/etc/init.d/network reload",
@@ -140,7 +136,7 @@ def build_hybrid_commands(
     active_isolated_vlans: set[int],
     has_shared_duts: bool,
     uplink_ports: list[int],
-    vlan_mesh: int = 200,
+    vlan_shared: int = 200,
     ports_to_include: set[int] | None = None,
     include_uplinks: bool = True,
 ) -> list[str]:
@@ -152,24 +148,24 @@ def build_hybrid_commands(
     cmds: list[str] = []
 
     if has_shared_duts:
-        cmds.extend(ensure_vlan_commands(vlan_mesh))
+        cmds.extend(ensure_vlan_commands(vlan_shared))
 
     for port, pool, isolated_vlan in port_assignments:
         if ports_to_include is not None and port not in ports_to_include:
             continue
         if _normalize_pool(pool) == "isolated":
             cmds.extend(assign_port_vlan_commands(
-                port, isolated_vlan, "untagged", remove_vlans=[vlan_mesh],
+                port, isolated_vlan, "untagged", remove_vlans=[vlan_shared],
             ))
         else:
             cmds.extend(assign_port_vlan_commands(
-                port, vlan_mesh, "untagged", remove_vlans=[isolated_vlan],
+                port, vlan_shared, "untagged", remove_vlans=[isolated_vlan],
             ))
 
     if include_uplinks and uplink_ports:
         all_vlans = sorted(active_isolated_vlans)
         if has_shared_duts:
-            all_vlans.append(vlan_mesh)
+            all_vlans.append(vlan_shared)
         all_vlans = sorted(set(all_vlans))
         for vlan in all_vlans:
             for uplink_port in uplink_ports:
@@ -177,7 +173,7 @@ def build_hybrid_commands(
                     uplink_port, vlan, "tagged",
                 ))
 
-    cmds.extend(ensure_commit_commands())
+    cmds.extend(finalize_vlan_commands())
     return cmds
 
 

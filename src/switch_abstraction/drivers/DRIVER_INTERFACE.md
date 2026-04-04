@@ -40,6 +40,14 @@ Build CLI commands for hybrid VLAN assignment (mixed isolated + shared topology)
 
 ## Optional exports
 
+### `finalize_vlan_commands() -> list[str]`
+
+Build any final commands required to fully apply pending VLAN changes.
+
+- Use this when a driver needs an explicit commit/reload/apply step after
+  one or more `assign_port_vlan_commands(...)` calls.
+- Return an empty list for drivers whose normal config flow already applies changes.
+
 ### `get_port_pvid_command(port: int) -> str`
 
 Build the CLI command to query a port's current PVID. If not implemented, `SwitchClient.get_port_pvid()` will not work for that driver.
@@ -50,5 +58,5 @@ Parse the PVID value from the output of `get_port_pvid_command()`. Returns the P
 
 ## Reference implementations
 
-- [tplink_jetstream.py](tplink_jetstream.py) - TP-Link JetStream switches (e.g. SG2016P). Netmiko device_type: `tplink_jetstream`. Uses vendor-specific interactive CLI.
-- [openwrt.py](openwrt.py) - Switches running OpenWrt (e.g. Zyxel GS1900-24EP). Netmiko device_type: `linux`. Uses UCI shell commands over SSH to manage DSA bridge-vlans and PoE. Also exports `ensure_commit_commands()` to batch a final `uci commit` + service reload after multiple port changes.
+- [tplink_jetstream.py](tplink_jetstream.py) - TP-Link JetStream switches (e.g. SG2016P). Netmiko device_type: `tplink_jetstream`. Uses vendor-specific interactive CLI and an empty `finalize_vlan_commands()`.
+- [openwrt.py](openwrt.py) - Switches running OpenWrt (e.g. Zyxel GS1900-24EP). Netmiko device_type: `linux`. Uses UCI shell commands over SSH to manage DSA bridge-vlans and PoE, with `finalize_vlan_commands()` for commit + reload.

@@ -30,8 +30,8 @@ from pathlib import Path
 
 import yaml
 
-from switch_abstraction.client import SwitchClient, get_switch_driver
-from switch_abstraction.constants import VLAN_MESH, default_dut_config_path
+from switch_abstraction.client import SwitchClient
+from switch_abstraction.constants import VLAN_SHARED, default_dut_config_path
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +57,11 @@ def load_dut_map(config_path: Path | str | None = None) -> dict[str, dict]:
     return load_config(config_path).get("duts", {})
 
 
-def get_vlan_mesh(config: dict | None = None) -> int:
-    """Resolve the mesh/topology VLAN from config, falling back to VLAN_MESH constant."""
+def get_vlan_shared(config: dict | None = None) -> int:
+    """Resolve the shared/topology VLAN from config, falling back to VLAN_SHARED."""
     if config:
-        return config.get("switch", {}).get("vlan_topology", VLAN_MESH)
-    return VLAN_MESH
+        return config.get("switch", {}).get("vlan_topology", VLAN_SHARED)
+    return VLAN_SHARED
 
 
 def get_default_pool(hw: dict) -> str:
@@ -78,7 +78,7 @@ def get_default_pool(hw: dict) -> str:
 
 
 def get_default_vlan(
-    dut_name: str,
+    _dut_name: str,
     hw: dict,
     *,
     config: dict | None = None,
@@ -86,8 +86,45 @@ def get_default_vlan(
     """Resolve the default VLAN for a DUT based on its configured pool."""
     pool = get_default_pool(hw)
     if pool == "shared":
-        return get_vlan_mesh(config)
+        return get_vlan_shared(config)
     return hw["switch_vlan_isolated"]
+
+
+def _switch_client_kwargs(config: dict | None = None) -> dict[str, object]:
+    """Return SwitchClient keyword args derived from the parsed config."""
+    if config is None:
+        return {}
+    return {"config": config.get("switch", {})}
+
+
+def _resolve_client_and_driver(
+    *,
+    config: dict | None = None,
+    client: SwitchClient | None = None,
+    driver=None,
+    driver_name: str | None = None,
+):
+    """Resolve the active client and driver for a VLAN operation."""
+    if client is None:
+        client = SwitchClient(
+            driver=driver,
+            driver_name=driver_name,
+            **_switch_client_kwargs(config),
+        )
+
+    resolved_driver = driver or getattr(client, "driver", None)
+    if resolved_driver is None:
+        raise ValueError("Could not resolve an active switch driver")
+
+    return client, resolved_driver
+
+
+def _finalize_vlan_commands(driver) -> list[str]:
+    """Return any driver-specific commands needed to apply pending VLAN changes."""
+    finalize = getattr(driver, "finalize_vlan_commands", None)
+    if not callable(finalize):
+        return []
+    return list(finalize() or [])
 
 
 def set_port_vlan(
@@ -97,6 +134,9 @@ def set_port_vlan(
     dut_map: dict[str, dict] | None = None,
     config: dict | None = None,
     config_path: Path | str | None = None,
+    client: SwitchClient | None = None,
+    driver=None,
+    driver_name: str | None = None,
 ) -> bool:
     """Switch a DUT's port to the target VLAN.
 
@@ -115,7 +155,7 @@ def set_port_vlan(
     if dut_map is None:
         dut_map = config.get("duts", {})
 
-    vlan_mesh = get_vlan_mesh(config)
+    vlan_shared = get_vlan_shared(config)
 
     hw = dut_map.get(dut_name)
     if hw is None:
@@ -126,24 +166,34 @@ def set_port_vlan(
     isolated_vlan = hw["switch_vlan_isolated"]
 
     if vlan_id == isolated_vlan:
-        remove_vlans = [vlan_mesh]
-    elif vlan_id == vlan_mesh:
+        remove_vlans = [vlan_shared]
+    elif vlan_id == vlan_shared:
         remove_vlans = [isolated_vlan]
     else:
-        remove_vlans = [isolated_vlan, vlan_mesh]
+        remove_vlans = [isolated_vlan, vlan_shared]
 
-    driver = get_switch_driver()
-    cmds = driver.assign_port_vlan_commands(
+    try:
+        client, resolved_driver = _resolve_client_and_driver(
+            config=config,
+            client=client,
+            driver=driver,
+            driver_name=driver_name,
+        )
+    except ValueError as e:
+        logger.error("%s", e)
+        return False
+
+    cmds = resolved_driver.assign_port_vlan_commands(
         port, vlan_id, "untagged", remove_vlans=remove_vlans,
     )
 
     extra_port = hw.get("switch_port_poe")
     if extra_port and extra_port != port:
-        cmds.extend(driver.assign_port_vlan_commands(
+        cmds.extend(resolved_driver.assign_port_vlan_commands(
             extra_port, vlan_id, "untagged", remove_vlans=remove_vlans,
         ))
+    cmds.extend(_finalize_vlan_commands(resolved_driver))
 
-    client = SwitchClient()
     success = client.send_config_commands(cmds)
 
     if success:
@@ -160,6 +210,9 @@ def restore_port_vlan(
     dut_map: dict[str, dict] | None = None,
     config: dict | None = None,
     config_path: Path | str | None = None,
+    client: SwitchClient | None = None,
+    driver=None,
+    driver_name: str | None = None,
 ) -> bool:
     """Restore a DUT's port to its configured default pool."""
     if config is None and dut_map is None:
@@ -173,9 +226,27 @@ def restore_port_vlan(
         logger.error("DUT '%s' not found in config", dut_name)
         return False
 
-    default_vlan = get_default_vlan(dut_name, hw, config=config)
+    try:
+        default_vlan = get_default_vlan(dut_name, hw, config=config)
+    except ValueError as e:
+        logger.error("%s", e)
+        return False
+
+    set_kwargs = {
+        "dut_map": dut_map,
+        "config": config,
+    }
+    if client is not None:
+        set_kwargs["client"] = client
+    if driver is not None:
+        set_kwargs["driver"] = driver
+    if driver_name is not None:
+        set_kwargs["driver_name"] = driver_name
+
     return set_port_vlan(
-        dut_name, default_vlan, dut_map=dut_map, config=config,
+        dut_name,
+        default_vlan,
+        **set_kwargs,
     )
 
 
@@ -183,7 +254,8 @@ def _build_dut_commands(
     dut_name: str,
     vlan_id: int,
     dut_map: dict[str, dict],
-    vlan_mesh: int,
+    vlan_shared: int,
+    driver,
 ) -> list[str] | None:
     """Build CLI commands for a single DUT VLAN change. Returns None if DUT not found."""
     hw = dut_map.get(dut_name)
@@ -195,13 +267,12 @@ def _build_dut_commands(
     isolated_vlan = hw["switch_vlan_isolated"]
 
     if vlan_id == isolated_vlan:
-        remove_vlans = [vlan_mesh]
-    elif vlan_id == vlan_mesh:
+        remove_vlans = [vlan_shared]
+    elif vlan_id == vlan_shared:
         remove_vlans = [isolated_vlan]
     else:
-        remove_vlans = [isolated_vlan, vlan_mesh]
+        remove_vlans = [isolated_vlan, vlan_shared]
 
-    driver = get_switch_driver()
     cmds = driver.assign_port_vlan_commands(
         port, vlan_id, "untagged", remove_vlans=remove_vlans,
     )
@@ -221,6 +292,9 @@ def set_ports_vlan_batch(
     dut_map: dict[str, dict] | None = None,
     config: dict | None = None,
     config_path: Path | str | None = None,
+    client: SwitchClient | None = None,
+    driver=None,
+    driver_name: str | None = None,
 ) -> bool:
     """Switch multiple DUT ports to a VLAN in a single SSH session.
 
@@ -232,12 +306,25 @@ def set_ports_vlan_batch(
     if dut_map is None:
         dut_map = config.get("duts", {})
 
-    vlan_mesh = get_vlan_mesh(config)
+    vlan_shared = get_vlan_shared(config)
+    try:
+        client, resolved_driver = _resolve_client_and_driver(
+            config=config,
+            client=client,
+            driver=driver,
+            driver_name=driver_name,
+        )
+    except ValueError as e:
+        logger.error("%s", e)
+        return False
+
     all_cmds: list[str] = []
     valid_duts: list[str] = []
 
     for name in dut_names:
-        cmds = _build_dut_commands(name, vlan_id, dut_map, vlan_mesh)
+        cmds = _build_dut_commands(
+            name, vlan_id, dut_map, vlan_shared, resolved_driver
+        )
         if cmds is None:
             return False
         all_cmds.extend(cmds)
@@ -246,7 +333,7 @@ def set_ports_vlan_batch(
     if not all_cmds:
         return True
 
-    client = SwitchClient()
+    all_cmds.extend(_finalize_vlan_commands(resolved_driver))
     success = client.send_config_commands(all_cmds)
 
     if success:
@@ -265,6 +352,9 @@ def restore_ports_vlan_batch(
     dut_map: dict[str, dict] | None = None,
     config: dict | None = None,
     config_path: Path | str | None = None,
+    client: SwitchClient | None = None,
+    driver=None,
+    driver_name: str | None = None,
 ) -> bool:
     """Restore multiple DUT ports to their configured default pools in one SSH session."""
     if config is None and dut_map is None:
@@ -272,7 +362,18 @@ def restore_ports_vlan_batch(
     if dut_map is None:
         dut_map = config.get("duts", {})
 
-    vlan_mesh = get_vlan_mesh(config)
+    vlan_shared = get_vlan_shared(config)
+    try:
+        client, resolved_driver = _resolve_client_and_driver(
+            config=config,
+            client=client,
+            driver=driver,
+            driver_name=driver_name,
+        )
+    except ValueError as e:
+        logger.error("%s", e)
+        return False
+
     all_cmds: list[str] = []
     valid_duts: list[str] = []
 
@@ -281,8 +382,14 @@ def restore_ports_vlan_batch(
         if hw is None:
             logger.error("DUT '%s' not found in config", name)
             return False
-        default_vlan = get_default_vlan(name, hw, config=config)
-        cmds = _build_dut_commands(name, default_vlan, dut_map, vlan_mesh)
+        try:
+            default_vlan = get_default_vlan(name, hw, config=config)
+        except ValueError as e:
+            logger.error("%s", e)
+            return False
+        cmds = _build_dut_commands(
+            name, default_vlan, dut_map, vlan_shared, resolved_driver
+        )
         if cmds is None:
             return False
         all_cmds.extend(cmds)
@@ -291,7 +398,7 @@ def restore_ports_vlan_batch(
     if not all_cmds:
         return True
 
-    client = SwitchClient()
+    all_cmds.extend(_finalize_vlan_commands(resolved_driver))
     success = client.send_config_commands(all_cmds)
 
     if success:
@@ -312,9 +419,9 @@ def main():
 Examples:
   switch-vlan belkin_rt3200_1 200              # One DUT to VLAN 200
   switch-vlan belkin_rt3200_1 belkin_rt3200_2 200   # Multiple DUTs to VLAN 200
-  switch-vlan belkin_rt3200_1 --restore        # Restore one DUT
+  switch-vlan belkin_rt3200_1 --restore        # Restore one DUT to its configured pool
   switch-vlan belkin_rt3200_1 belkin_rt3200_2 --restore  # Restore multiple
-  switch-vlan --restore-all                    # Restore all DUTs to isolated VLANs
+  switch-vlan --restore-all                    # Restore all DUTs to their configured pools
 """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -324,11 +431,11 @@ Examples:
     )
     parser.add_argument(
         "--restore", action="store_true",
-        help="Restore DUT(s) to their default isolated VLAN",
+        help="Restore DUT(s) to their configured default pool",
     )
     parser.add_argument(
         "--restore-all", action="store_true",
-        help="Restore ALL DUTs in config to their default isolated VLANs",
+        help="Restore ALL DUTs in config to their configured default pools",
     )
     parser.add_argument(
         "--config", type=Path, default=None,
