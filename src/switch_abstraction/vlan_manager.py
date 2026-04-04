@@ -1,5 +1,5 @@
 """
-VLAN Manager - Per-DUT dynamic VLAN switching for unified pool architecture.
+VLAN Manager - Per-DUT dynamic VLAN switching between isolated and shared VLANs.
 
 Provides set_port_vlan() to change a single switch port's VLAN assignment
 at test time. Designed to be called from pytest fixtures or CLI.
@@ -74,7 +74,7 @@ def set_port_vlan(
 
     Args:
         dut_name: key in the duts section of config.
-        vlan_id: target VLAN (e.g. 200 for mesh, or the isolated VLAN).
+        vlan_id: target VLAN (e.g. 200 for the shared VLAN, or the isolated VLAN).
         dut_map: pre-loaded DUT map (avoids re-reading YAML per call).
         config: full parsed config dict (to read vlan_topology).
         config_path: override path to dut-config.yaml.
