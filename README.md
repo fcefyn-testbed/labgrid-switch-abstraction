@@ -4,7 +4,7 @@ Vendor-agnostic switch management for [Labgrid](https://labgrid.readthedocs.io/)
 
 Analogous to [PDUDaemon](https://github.com/pdudaemon/pdudaemon) for power control, this package handles **network topology control**: reassigning DUT switch ports between isolated VLANs (one DUT per VLAN) and a shared VLAN (multiple DUTs on the same VLAN).
 
-Switch-specific CLI commands are delegated to **driver modules** (pluggable, one per vendor). SSH connections use [Netmiko](https://github.com/ktbyers/netmiko).
+Switch-specific CLI commands are delegated to **driver modules** (pluggable, one per vendor). SSH connections use [Netmiko](https://github.com/ktbyers/netmiko), and public VLAN operations automatically run any driver-specific finalize/apply step required after staging VLAN changes.
 
 ## Quick start
 
@@ -113,6 +113,9 @@ The CLI also batches automatically when multiple DUT names are given:
 switch-vlan my_router_1 my_router_2 my_router_3 200
 ```
 
+For embedded/library usage, prefer passing already-parsed `config` and `dut_map`
+to avoid implicit reads of host-global files.
+
 ### Querying current port VLAN (PVID)
 
 ```python
@@ -120,6 +123,23 @@ from switch_abstraction.client import SwitchClient
 
 client = SwitchClient()
 pvid = client.get_port_pvid(port=1)  # returns int or None
+```
+
+### Explicit client configuration
+
+`SwitchClient` can be instantiated with explicit connection config instead of
+relying on `~/.config/switch.conf`:
+
+```python
+from switch_abstraction.client import SwitchClient
+
+client = SwitchClient(config={
+    "host": "192.168.0.1",
+    "user": "admin",
+    "password": "secret",
+    "device_type": "tplink_jetstream",
+    "driver": "tplink_jetstream",
+})
 ```
 
 ## Configuration
@@ -198,8 +218,12 @@ that DUT to `switch.vlan_topology` instead of `switch_vlan_isolated`.
 | `SWITCH_HOST` | Overrides switch IP from config file |
 | `SWITCH_USER` | Overrides SSH username from config file |
 | `SWITCH_PASSWORD` | Overrides SSH password from config file |
+| `SWITCH_DRIVER` | Overrides the active driver module name |
+| `SWITCH_DEVICE_TYPE` | Overrides the Netmiko device type |
 | `SWITCH_CONFIG` | Path to `switch.conf` (overrides default locations) |
 | `SWITCH_DUT_CONFIG` | Path to `dut-config.yaml` (overrides `/etc/testbed/dut-config.yaml`) |
+| `SWITCH_LOCK_PATH` | Path to the lock file used to serialize switch access |
+| `SWITCH_LOCK_TIMEOUT` | Max seconds to wait for the switch lock before failing |
 
 ## Adding a new switch driver
 
@@ -211,6 +235,7 @@ def build_poe_commands(port: int, action: str) -> list[str]: ...
 def assign_port_vlan_commands(port, vlan_id, mode, remove_vlans) -> list[str]: ...
 def ensure_vlan_commands(vlan_id: int, name: str | None = None) -> list[str]: ...
 def build_hybrid_commands(port_assignments, ...) -> list[str]: ...
+def finalize_vlan_commands() -> list[str]: ...
 
 # Optional - needed for get_port_pvid() support:
 def get_port_pvid_command(port: int) -> str: ...
@@ -228,8 +253,6 @@ SWITCH_PASSWORD=
 SWITCH_DRIVER=openwrt
 SWITCH_DEVICE_TYPE=linux
 ```
-
-> **Note for UCI-based drivers:** The `openwrt` driver also exports `ensure_commit_commands()` to emit a final `uci commit network` + service reload. Drivers using interactive CLI (like `tplink_jetstream`) don't need this because `send_config_set()` applies changes on exit. See [DRIVER_INTERFACE.md](src/switch_abstraction/drivers/DRIVER_INTERFACE.md) for details.
 
 ### Netmiko device types
 
@@ -250,10 +273,17 @@ Contributions of drivers for other switches are welcome.
 switch_abstraction/
 ├── client.py           # SwitchClient: SSH via Netmiko, flock serialization
 ├── vlan_manager.py     # set_port_vlan / restore: DUT name → port → driver commands
-├── constants.py        # defaults (VLAN_MESH, config paths)
+├── constants.py        # defaults (VLAN_SHARED, config paths)
 └── drivers/
     ├── __init__.py     # dynamic driver loader
     ├── tplink_jetstream.py  # TP-Link JetStream CLI commands
     ├── openwrt.py           # OpenWrt UCI commands (DSA bridge-vlans)
     └── DRIVER_INTERFACE.md  # driver contract
+```
+
+## Development
+
+```bash
+pip install .[dev]
+pytest -q
 ```

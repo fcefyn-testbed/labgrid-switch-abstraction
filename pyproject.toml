@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "labgrid-switch-abstraction"
 version = "0.1.0"
-description = "Vendor-agnostic switch abstraction layer for LabGrid testbeds"
+description = "Vendor-agnostic switch VLAN abstraction for Labgrid-based automation"
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
@@ -22,3 +22,6 @@ switch-vlan = "switch_abstraction.vlan_manager:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
