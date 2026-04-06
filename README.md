@@ -258,14 +258,14 @@ SWITCH_DEVICE_TYPE=linux
 
 The `SWITCH_DEVICE_TYPE` value is passed directly to Netmiko's `ConnectHandler(device_type=...)`. See the [Netmiko PLATFORMS list](https://github.com/ktbyers/netmiko/blob/develop/PLATFORMS.md) for all supported types. Common examples: `tplink_jetstream`, `cisco_ios`, `arista_eos`, `hp_procurve`, `linux`.
 
-## Tested switches
+## Supported switches
 
-| Switch | Driver | Netmiko device_type | Notes |
-|---|---|---|---|
-| TP-Link SG2016P (JetStream) | `tplink_jetstream` | `tplink_jetstream` | Vendor CLI over SSH |
-| Zyxel GS1900-24EP (OpenWrt) | `openwrt` | `linux` | UCI commands over SSH (DSA bridge-vlans) |
+| Switch | Driver | Netmiko device_type | Status | Notes |
+|---|---|---|---|---|
+| TP-Link SG2016P (JetStream) | `tplink_jetstream` | `tplink_jetstream` | Tested | Vendor CLI over SSH |
+| Zyxel GS1900-24EP (OpenWrt) | `openwrt` | `linux` | Untested | UCI commands over SSH (DSA bridge-vlans) |
 
-Contributions of drivers for other switches are welcome.
+The OpenWrt driver implements the full driver interface but has not been validated on hardware yet. Contributions and test reports are welcome.
 
 ## Architecture
 
