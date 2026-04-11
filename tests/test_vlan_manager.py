@@ -16,6 +16,20 @@ class FakeDriver:
     def finalize_vlan_commands(self):
         return ["finalize"]
 
+    def ensure_vlan_commands(self, vlan_id, name=None):
+        return [f"ensure_vlan={vlan_id}"]
+
+    def build_hybrid_commands(self, port_assignments, active_isolated_vlans,
+                              has_shared_duts, uplink_ports, vlan_shared=200,
+                              ports_to_include=None, include_uplinks=True):
+        cmds = []
+        for port, pool, vlan in port_assignments:
+            cmds.append(f"hybrid port={port} pool={pool} vlan={vlan}")
+        if include_uplinks and uplink_ports:
+            all_vlans = sorted(active_isolated_vlans | {vlan_shared})
+            cmds.append(f"uplinks={uplink_ports} tagged={all_vlans}")
+        return cmds
+
 
 class FakeClient:
     def __init__(self, driver):
@@ -142,3 +156,75 @@ def test_restore_ports_vlan_batch_returns_false_for_missing_dut():
         client=client,
     )
     assert client.commands == []
+
+
+def test_apply_full_topology_creates_vlans_and_configures_ports():
+    driver = FakeDriver()
+    client = FakeClient(driver)
+    config = {
+        "switch": {
+            "vlan_topology": 200,
+            "uplink_ports": [9, 10],
+        },
+        "duts": {
+            "dut-a": {"switch_port": 1, "switch_vlan_isolated": 101, "pool": "isolated"},
+            "dut-b": {"switch_port": 2, "switch_vlan_isolated": 102, "pool": "shared"},
+        },
+    }
+
+    assert vlan_manager.apply_full_topology(config=config, client=client)
+
+    sent = client.commands[0]
+    assert "ensure_vlan=101" in sent
+    assert "ensure_vlan=102" in sent
+    assert "ensure_vlan=200" in sent
+    assert "hybrid port=1 pool=isolated vlan=101" in sent
+    assert "hybrid port=2 pool=shared vlan=102" in sent
+    assert "uplinks=[9, 10] tagged=[101, 102, 200]" in sent
+    assert sent[-1] == "finalize"
+
+
+def test_apply_full_topology_includes_poe_ports():
+    driver = FakeDriver()
+    client = FakeClient(driver)
+    config = {
+        "switch": {"vlan_topology": 200, "uplink_ports": []},
+        "duts": {
+            "dut-a": {
+                "switch_port": 1,
+                "switch_port_poe": 3,
+                "switch_vlan_isolated": 101,
+            },
+        },
+    }
+
+    assert vlan_manager.apply_full_topology(config=config, client=client)
+
+    sent = client.commands[0]
+    assert "hybrid port=1 pool=isolated vlan=101" in sent
+    assert "hybrid port=3 pool=isolated vlan=101" in sent
+
+
+def test_apply_full_topology_returns_false_when_no_duts():
+    client = FakeClient(FakeDriver())
+    config = {"switch": {}, "duts": {}}
+
+    assert not vlan_manager.apply_full_topology(config=config, client=client)
+    assert client.commands == []
+
+
+def test_apply_full_topology_returns_false_when_driver_lacks_hybrid():
+    class MinimalDriver:
+        def finalize_vlan_commands(self):
+            return []
+
+        def ensure_vlan_commands(self, vlan_id, name=None):
+            return []
+
+    client = FakeClient(MinimalDriver())
+    config = {
+        "switch": {"vlan_topology": 200},
+        "duts": {"dut-a": {"switch_port": 1, "switch_vlan_isolated": 101}},
+    }
+
+    assert not vlan_manager.apply_full_topology(config=config, client=client)
