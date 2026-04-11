@@ -66,6 +66,10 @@ switch-vlan my_router_1 --restore
 # Restore all DUTs to their configured default pools
 switch-vlan --restore-all
 
+# Full topology setup (after factory reset or initial deployment)
+# Creates all VLANs, configures DUT access ports, and sets uplink trunk ports
+switch-vlan --init
+
 # Use a custom config path
 switch-vlan --config /path/to/dut-config.yaml my_router_1 200
 

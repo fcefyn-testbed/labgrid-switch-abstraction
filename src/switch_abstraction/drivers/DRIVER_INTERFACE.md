@@ -36,7 +36,7 @@ Build CLI commands to create a VLAN if it does not exist. Optional; used for dyn
 
 ### `build_hybrid_commands(port_assignments, ...) -> list[str]`
 
-Build CLI commands for hybrid VLAN assignment (mixed isolated + shared topology). Used by a higher-level pool manager for batch reconfiguration.
+Build CLI commands for hybrid VLAN assignment (mixed isolated + shared topology). Called by `switch-vlan --init` to apply the full switch topology (DUT access ports + uplink trunk ports) in a single SSH session. Also usable from library code via `apply_full_topology()`.
 
 ## Optional exports
 
