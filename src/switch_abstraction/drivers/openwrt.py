@@ -164,8 +164,7 @@ def build_hybrid_commands(
 
     if include_uplinks and uplink_ports:
         all_vlans = sorted(active_isolated_vlans)
-        if has_shared_duts:
-            all_vlans.append(vlan_shared)
+        all_vlans.append(vlan_shared)
         all_vlans = sorted(set(all_vlans))
         for vlan in all_vlans:
             for uplink_port in uplink_ports:
