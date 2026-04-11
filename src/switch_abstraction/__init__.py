@@ -7,6 +7,7 @@ for per-DUT dynamic VLAN switching at test time.
 
 from switch_abstraction.client import SwitchClient
 from switch_abstraction.vlan_manager import (
+    apply_full_topology,
     get_vlan_shared,
     load_config,
     load_dut_map,
@@ -18,6 +19,7 @@ from switch_abstraction.vlan_manager import (
 
 __all__ = [
     "SwitchClient",
+    "apply_full_topology",
     "get_vlan_shared",
     "load_config",
     "load_dut_map",

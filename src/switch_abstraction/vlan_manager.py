@@ -412,6 +412,106 @@ def restore_ports_vlan_batch(
     return success
 
 
+def apply_full_topology(
+    *,
+    config: dict | None = None,
+    config_path: Path | str | None = None,
+    client: SwitchClient | None = None,
+    driver=None,
+    driver_name: str | None = None,
+) -> bool:
+    """Apply the full switch VLAN topology from dut-config.yaml.
+
+    Creates all VLANs, configures every DUT access port (untagged + PVID),
+    and sets uplink/trunk ports to carry all VLANs tagged.  Idempotent:
+    safe to re-run on an already-configured switch or after a factory reset.
+
+    Delegates to the driver's ``build_hybrid_commands()`` which handles
+    vendor-specific CLI differences.
+
+    Returns True on success, False on failure.
+    """
+    if config is None:
+        config = load_config(config_path)
+
+    dut_map = config.get("duts", {})
+    if not dut_map:
+        logger.error("No DUTs defined in config")
+        return False
+
+    switch_cfg = config.get("switch", {})
+    uplink_ports = switch_cfg.get("uplink_ports", [])
+    vlan_shared = get_vlan_shared(config)
+
+    try:
+        client, resolved_driver = _resolve_client_and_driver(
+            config=config,
+            client=client,
+            driver=driver,
+            driver_name=driver_name,
+        )
+    except ValueError as e:
+        logger.error("%s", e)
+        return False
+
+    port_assignments: list[tuple[int, str, int]] = []
+    isolated_vlans: set[int] = set()
+    has_shared_duts = False
+
+    for name, hw in dut_map.items():
+        port = hw["switch_port"]
+        pool = get_default_pool(hw)
+        isolated_vlan = hw["switch_vlan_isolated"]
+
+        port_assignments.append((port, pool, isolated_vlan))
+        isolated_vlans.add(isolated_vlan)
+
+        if pool == "shared":
+            has_shared_duts = True
+
+        extra_port = hw.get("switch_port_poe")
+        if extra_port and extra_port != port:
+            port_assignments.append((extra_port, pool, isolated_vlan))
+
+    ensure_vlan = getattr(resolved_driver, "ensure_vlan_commands", None)
+    all_cmds: list[str] = []
+
+    if callable(ensure_vlan):
+        for vlan_id in sorted(isolated_vlans):
+            all_cmds.extend(ensure_vlan(vlan_id))
+        all_cmds.extend(ensure_vlan(vlan_shared))
+
+    hybrid = getattr(resolved_driver, "build_hybrid_commands", None)
+    if not callable(hybrid):
+        logger.error("Driver does not implement build_hybrid_commands()")
+        return False
+
+    all_cmds.extend(hybrid(
+        port_assignments=port_assignments,
+        active_isolated_vlans=isolated_vlans,
+        has_shared_duts=has_shared_duts,
+        uplink_ports=uplink_ports,
+        vlan_shared=vlan_shared,
+        include_uplinks=True,
+    ))
+
+    all_cmds.extend(_finalize_vlan_commands(resolved_driver))
+
+    success = client.send_config_commands(all_cmds)
+
+    if success:
+        logger.info(
+            "Full topology applied: %d DUT ports, %d uplink ports, "
+            "VLANs %s + shared %d",
+            len(port_assignments), len(uplink_ports),
+            sorted(isolated_vlans), vlan_shared,
+        )
+    else:
+        logger.error("Failed to apply full topology")
+
+    return success
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Switch DUT port(s) to a target VLAN",
@@ -422,6 +522,7 @@ Examples:
   switch-vlan belkin_rt3200_1 --restore        # Restore one DUT to its configured pool
   switch-vlan belkin_rt3200_1 belkin_rt3200_2 --restore  # Restore multiple
   switch-vlan --restore-all                    # Restore all DUTs to their configured pools
+  switch-vlan --init                           # Full topology setup (after factory reset)
 """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -436,6 +537,10 @@ Examples:
     parser.add_argument(
         "--restore-all", action="store_true",
         help="Restore ALL DUTs in config to their configured default pools",
+    )
+    parser.add_argument(
+        "--init", action="store_true",
+        help="Apply full switch topology: create VLANs, configure access and trunk ports",
     )
     parser.add_argument(
         "--config", type=Path, default=None,
@@ -453,6 +558,10 @@ Examples:
     config = load_config(parsed.config)
     dut_map = config.get("duts", {})
 
+    if parsed.init:
+        ok = apply_full_topology(config=config)
+        sys.exit(0 if ok else 1)
+
     if parsed.restore_all:
         all_names = list(dut_map.keys())
         all_ok = restore_ports_vlan_batch(
@@ -462,7 +571,7 @@ Examples:
 
     positional = parsed.args
     if not positional:
-        parser.error("Provide DUT name(s) or use --restore-all")
+        parser.error("Provide DUT name(s), or use --restore-all / --init")
 
     vlan_id: int | None = None
     dut_names: list[str]
