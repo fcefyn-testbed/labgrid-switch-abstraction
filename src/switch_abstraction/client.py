@@ -34,6 +34,7 @@ DEFAULT_DEVICE_TYPE = "tplink_jetstream"
 
 DEFAULT_LOCK_PATH = "/tmp/switch.lock"
 DEFAULT_LOCK_TIMEOUT = 60.0
+DEFAULT_CONN_TIMEOUT = 15
 
 
 class SwitchLockTimeoutError(TimeoutError):
@@ -237,6 +238,25 @@ def get_credentials(
     }
 
 
+def _resolve_conn_timeout(config: Mapping[str, object] | None = None) -> int:
+    """Return SSH conn_timeout from env, config, or built-in default."""
+    raw = os.environ.get("SWITCH_CONN_TIMEOUT")
+    if raw is None and config:
+        raw = _config_value(config, "conn_timeout", "SWITCH_CONN_TIMEOUT")
+    if raw is None:
+        return DEFAULT_CONN_TIMEOUT
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid SWITCH_CONN_TIMEOUT=%r, using default %d",
+            raw,
+            DEFAULT_CONN_TIMEOUT,
+        )
+        return DEFAULT_CONN_TIMEOUT
+    return max(1, value)
+
+
 class SwitchClient:
     """Central SSH client for managed switch operations.
 
@@ -251,6 +271,7 @@ class SwitchClient:
         password: str | None = None,
         device_type: str | None = None,
         *,
+        conn_timeout: int | None = None,
         config: Mapping[str, object] | None = None,
         driver: ModuleType | None = None,
         driver_name: str | None = None,
@@ -275,6 +296,7 @@ class SwitchClient:
         self.user = creds["user"]
         self.password = creds["password"]
         self.device_type = creds["device_type"]
+        self.conn_timeout = conn_timeout or _resolve_conn_timeout(resolved_config)
         self.driver = driver or get_switch_driver(driver_name, config=resolved_config)
 
         if not self.password:
@@ -284,7 +306,12 @@ class SwitchClient:
             )
 
     def _connect(self):
-        """Create a Netmiko connection (caller must disconnect)."""
+        """Create a Netmiko connection (caller must disconnect).
+
+        Disables SSH agent and key lookup to force password auth, avoiding
+        connection drops on devices that reject unsolicited key offers
+        (e.g. TP-Link JetStream firmware).
+        """
         from netmiko import ConnectHandler
 
         return ConnectHandler(
@@ -292,7 +319,9 @@ class SwitchClient:
             host=self.host,
             username=self.user,
             password=self.password,
-            conn_timeout=10,
+            conn_timeout=self.conn_timeout,
+            allow_agent=False,
+            look_for_keys=False,
         )
 
     def send_config_commands(self, commands: list[str]) -> bool:
