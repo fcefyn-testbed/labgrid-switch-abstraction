@@ -34,8 +34,6 @@ DEFAULT_DEVICE_TYPE = "tplink_jetstream"
 
 DEFAULT_LOCK_PATH = "/tmp/switch.lock"
 DEFAULT_LOCK_TIMEOUT = 60.0
-DEFAULT_CONFIG_RETRIES = 2
-DEFAULT_CONFIG_RETRY_DELAY = 1.0
 
 
 class SwitchLockTimeoutError(TimeoutError):
@@ -297,65 +295,36 @@ class SwitchClient:
             conn_timeout=10,
         )
 
-    def send_config_commands(
-        self,
-        commands: list[str],
-        retries: int = DEFAULT_CONFIG_RETRIES,
-        retry_delay: float = DEFAULT_CONFIG_RETRY_DELAY,
-    ) -> bool:
-        """Send configuration commands to the switch with automatic retry.
-
-        Retries handle transient Netmiko/SSH failures such as
-        'Failed to exit configuration mode' from TP-Link JetStream switches.
-        Each retry opens a fresh SSH connection inside the same lock hold.
-        """
+    def send_config_commands(self, commands: list[str]) -> bool:
+        """Send configuration commands to the switch."""
         if not commands:
             logger.info("No commands to send, skipping SSH session")
             return True
 
-        max_attempts = max(1, retries + 1)
         try:
             with switch_lock():
-                last_error: Exception | None = None
-                for attempt in range(1, max_attempts + 1):
-                    conn = None
-                    try:
-                        conn = self._connect()
-                        output = conn.send_config_set(
-                            commands,
-                            cmd_verify=False,
-                        )
-                        logger.debug("Switch output:\n%s", output)
-                        logger.info(
-                            "Switch configuration applied successfully (%d commands)",
-                            len(commands),
-                        )
-                        return True
-                    except Exception as e:
-                        last_error = e
-                        if attempt < max_attempts:
-                            logger.warning(
-                                "Switch command failed on attempt %d/%d (%s), "
-                                "retrying in %.1fs",
-                                attempt,
-                                max_attempts,
-                                e,
-                                retry_delay,
-                            )
-                            time.sleep(retry_delay)
-                        else:
-                            logger.error(
-                                "Switch command execution failed after %d attempts: %s",
-                                max_attempts,
-                                e,
-                            )
-                    finally:
-                        if conn is not None:
-                            try:
-                                conn.disconnect()
-                            except Exception:
-                                pass
-                return False
+                try:
+                    conn = self._connect()
+                except Exception as e:
+                    logger.error("SSH connection to switch failed: %s", e)
+                    return False
+
+                try:
+                    output = conn.send_config_set(
+                        commands,
+                        cmd_verify=False,
+                    )
+                    logger.debug("Switch output:\n%s", output)
+                    logger.info(
+                        "Switch configuration applied successfully (%d commands)",
+                        len(commands),
+                    )
+                    return True
+                except Exception as e:
+                    logger.error("Switch command execution failed: %s", e)
+                    return False
+                finally:
+                    conn.disconnect()
         except SwitchLockTimeoutError as e:
             logger.error("%s", e)
             return False
@@ -439,11 +408,7 @@ class SwitchClient:
         return success
 
     def poe_cycle_multi(self, ports: list[int], delay_sec: float = 3.0) -> bool:
-        """Power cycle one or more PoE ports: off all, wait, on all.
-
-        If the 'on' phase fails, retries with a fresh SSH connection to avoid
-        leaving devices permanently powered off.
-        """
+        """Power cycle one or more PoE ports: off all, wait, on all."""
         off_cmds: list[str] = []
         on_cmds: list[str] = []
         for port in ports:
@@ -452,7 +417,6 @@ class SwitchClient:
 
         try:
             with switch_lock():
-                conn = None
                 try:
                     conn = self._connect()
                 except Exception as e:
@@ -462,54 +426,16 @@ class SwitchClient:
                 try:
                     conn.send_config_set(off_cmds, cmd_verify=False)
                     logger.info("PoE off on port(s) %s, waiting %.1fs", ports, delay_sec)
+                    time.sleep(delay_sec)
+
+                    conn.send_config_set(on_cmds, cmd_verify=False)
+                    logger.info("PoE cycle on port(s) %s completed successfully", ports)
+                    return True
                 except Exception as e:
-                    logger.error("PoE off failed on port(s) %s: %s", ports, e)
+                    logger.error("PoE cycle failed on port(s) %s: %s", ports, e)
                     return False
                 finally:
-                    try:
-                        conn.disconnect()
-                    except Exception:
-                        pass
-
-                time.sleep(delay_sec)
-
-                max_on_attempts = DEFAULT_CONFIG_RETRIES + 1
-                for attempt in range(1, max_on_attempts + 1):
-                    conn = None
-                    try:
-                        conn = self._connect()
-                        conn.send_config_set(on_cmds, cmd_verify=False)
-                        logger.info(
-                            "PoE cycle on port(s) %s completed successfully", ports
-                        )
-                        return True
-                    except Exception as e:
-                        if attempt < max_on_attempts:
-                            logger.warning(
-                                "PoE on failed on attempt %d/%d for port(s) %s (%s), "
-                                "retrying in %.1fs",
-                                attempt,
-                                max_on_attempts,
-                                ports,
-                                e,
-                                DEFAULT_CONFIG_RETRY_DELAY,
-                            )
-                            time.sleep(DEFAULT_CONFIG_RETRY_DELAY)
-                        else:
-                            logger.error(
-                                "PoE on failed after %d attempts for port(s) %s: %s",
-                                max_on_attempts,
-                                ports,
-                                e,
-                            )
-                    finally:
-                        if conn is not None:
-                            try:
-                                conn.disconnect()
-                            except Exception:
-                                pass
-
-                return False
+                    conn.disconnect()
         except SwitchLockTimeoutError as e:
             logger.error("%s", e)
             return False
