@@ -7,6 +7,8 @@ drivers/. This module handles:
   - Credential loading from config files and environment variables
   - SSH connection via Netmiko (ConnectHandler)
   - Lockfile serialization to prevent concurrent SSH sessions
+  - Daemon-aware routing: when switch_daemon.py is running, commands are
+    sent via Unix socket instead of opening direct SSH sessions
   - High-level operations: send_config_commands, poe_on/off/cycle
 
 Requires: netmiko (pip install netmiko)
@@ -15,8 +17,10 @@ Requires: netmiko (pip install netmiko)
 from __future__ import annotations
 
 import fcntl
+import json
 import logging
 import os
+import socket
 import time
 from contextlib import contextmanager
 from types import ModuleType
@@ -35,6 +39,53 @@ DEFAULT_DEVICE_TYPE = "tplink_jetstream"
 DEFAULT_LOCK_PATH = "/tmp/switch.lock"
 DEFAULT_LOCK_TIMEOUT = 60.0
 DEFAULT_CONN_TIMEOUT = 15
+DEFAULT_DAEMON_SOCKET = "/tmp/switch-ssh.sock"
+_DAEMON_MSG_SIZE = 65536
+_DAEMON_TIMEOUT = 30.0
+
+
+class SwitchDaemonClient:
+    """Thin client that talks to switch_daemon.py via Unix socket.
+
+    Same pattern as DaemonClient in arduino_relay_control.py: probe the
+    socket to detect if the daemon is running, then send JSON commands.
+    When the daemon is unavailable, callers fall back to direct SSH.
+    """
+
+    def __init__(self, socket_path: str = DEFAULT_DAEMON_SOCKET):
+        self.socket_path = socket_path
+
+    def is_available(self) -> bool:
+        """Check if the daemon socket is reachable."""
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(1.0)
+                s.connect(self.socket_path)
+            return True
+        except (OSError, socket.error):
+            return False
+
+    def send_config(self, commands: list[str]) -> tuple[bool, str]:
+        """Send config commands via daemon. Returns (success, output_or_error)."""
+        return self._request({"action": "send_config", "commands": commands})
+
+    def send_command(self, command: str) -> tuple[bool, str]:
+        """Send a show command via daemon. Returns (success, output_or_error)."""
+        return self._request({"action": "send_command", "command": command})
+
+    def _request(self, payload: dict) -> tuple[bool, str]:
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(_DAEMON_TIMEOUT)
+                s.connect(self.socket_path)
+                s.sendall(json.dumps(payload).encode("utf-8"))
+                data = s.recv(_DAEMON_MSG_SIZE)
+                resp = json.loads(data.decode("utf-8"))
+                return resp.get("success", False), resp.get(
+                    "output", resp.get("error", "")
+                )
+        except Exception as e:
+            return False, str(e)
 
 
 class SwitchLockTimeoutError(TimeoutError):
@@ -260,8 +311,9 @@ def _resolve_conn_timeout(config: Mapping[str, object] | None = None) -> int:
 class SwitchClient:
     """Central SSH client for managed switch operations.
 
-    Uses Netmiko for SSH transport and vendor-specific drivers for
-    command building. All operations are serialized via a lockfile.
+    When switch_daemon.py is running, commands are routed through the daemon's
+    Unix socket (no direct SSH, no lockfile). Otherwise falls back to direct
+    Netmiko SSH with lockfile serialization.
     """
 
     def __init__(
@@ -299,11 +351,16 @@ class SwitchClient:
         self.conn_timeout = conn_timeout or _resolve_conn_timeout(resolved_config)
         self.driver = driver or get_switch_driver(driver_name, config=resolved_config)
 
-        if not self.password:
-            raise ValueError(
-                "Switch password required. Set SWITCH_PASSWORD in "
-                "~/.config/switch.conf or via env var."
-            )
+        self._daemon = SwitchDaemonClient()
+        self._use_daemon = self._daemon.is_available()
+        if self._use_daemon:
+            logger.info("Switch daemon detected, routing via Unix socket")
+        else:
+            if not self.password:
+                raise ValueError(
+                    "Switch password required. Set SWITCH_PASSWORD in "
+                    "~/.config/switch.conf or via env var."
+                )
 
     def _connect(self):
         """Create a Netmiko connection (caller must disconnect).
@@ -329,6 +386,17 @@ class SwitchClient:
         if not commands:
             logger.info("No commands to send, skipping SSH session")
             return True
+
+        if self._use_daemon:
+            ok, msg = self._daemon.send_config(commands)
+            if ok:
+                logger.info(
+                    "Switch configuration applied successfully (%d commands)",
+                    len(commands),
+                )
+            else:
+                logger.error("Daemon send_config failed: %s", msg)
+            return ok
 
         try:
             with switch_lock():
@@ -360,6 +428,13 @@ class SwitchClient:
 
     def send_command(self, command: str) -> str | None:
         """Send a single show command and return output, or None on failure."""
+        if self._use_daemon:
+            ok, output = self._daemon.send_command(command)
+            if not ok:
+                logger.error("Daemon send_command failed: %s", output)
+                return None
+            return output
+
         try:
             with switch_lock():
                 try:
@@ -443,6 +518,21 @@ class SwitchClient:
         for port in ports:
             off_cmds.extend(self.driver.build_poe_commands(port, "off"))
             on_cmds.extend(self.driver.build_poe_commands(port, "on"))
+
+        if self._use_daemon:
+            ok, msg = self._daemon.send_config(off_cmds)
+            if not ok:
+                logger.error("Daemon PoE off failed on port(s) %s: %s", ports, msg)
+                return False
+            logger.info("PoE off on port(s) %s, waiting %.1fs", ports, delay_sec)
+            time.sleep(delay_sec)
+
+            ok, msg = self._daemon.send_config(on_cmds)
+            if not ok:
+                logger.error("Daemon PoE on failed on port(s) %s: %s", ports, msg)
+                return False
+            logger.info("PoE cycle on port(s) %s completed successfully", ports)
+            return True
 
         try:
             with switch_lock():
