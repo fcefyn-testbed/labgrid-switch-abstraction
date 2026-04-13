@@ -308,9 +308,9 @@ class SwitchClient:
     def _connect(self):
         """Create a Netmiko connection (caller must disconnect).
 
-        Disables SSH agent and key lookup to force password auth, avoiding
-        connection drops on devices that reject unsolicited key offers
-        (e.g. TP-Link JetStream firmware).
+        Disables SSH agent and key-file scanning to force password auth,
+        avoiding connection drops on devices that reject unsolicited key
+        offers (e.g. TP-Link JetStream firmware).
         """
         from netmiko import ConnectHandler
 
@@ -321,7 +321,7 @@ class SwitchClient:
             password=self.password,
             conn_timeout=self.conn_timeout,
             allow_agent=False,
-            look_for_keys=False,
+            use_keys=False,
         )
 
     def send_config_commands(self, commands: list[str]) -> bool:
