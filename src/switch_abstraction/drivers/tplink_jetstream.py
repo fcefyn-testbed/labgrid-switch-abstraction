@@ -81,6 +81,11 @@ def finalize_vlan_commands() -> list[str]:
     return []
 
 
+def save_command() -> str:
+    """Privileged EXEC command to persist running-config to flash."""
+    return "copy running-config startup-config"
+
+
 def build_hybrid_commands(
     port_assignments: list[tuple[int, str, int]],
     active_isolated_vlans: set[int],

@@ -348,6 +348,7 @@ class SwitchClient:
                         "Switch configuration applied successfully (%d commands)",
                         len(commands),
                     )
+                    self._save_config(conn)
                     return True
                 except Exception as e:
                     logger.error("Switch command execution failed: %s", e)
@@ -357,6 +358,21 @@ class SwitchClient:
         except SwitchLockTimeoutError as e:
             logger.error("%s", e)
             return False
+
+    def _save_config(self, conn) -> None:
+        """Persist running-config to startup-config if the driver supports it."""
+        save_cmd_fn = getattr(self.driver, "save_command", None)
+        if not callable(save_cmd_fn):
+            return
+        cmd = save_cmd_fn()
+        if not cmd:
+            return
+        try:
+            output = conn.send_command_timing(cmd)
+            logger.info("Configuration saved to startup-config")
+            logger.debug("Save output: %s", output)
+        except Exception as e:
+            logger.warning("Failed to save config to startup: %s", e)
 
     def send_command(self, command: str) -> str | None:
         """Send a single show command and return output, or None on failure."""
