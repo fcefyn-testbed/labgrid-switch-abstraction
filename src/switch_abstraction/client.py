@@ -34,7 +34,17 @@ DEFAULT_DEVICE_TYPE = "tplink_jetstream"
 
 DEFAULT_LOCK_PATH = "/tmp/switch.lock"
 DEFAULT_LOCK_TIMEOUT = 60.0
-DEFAULT_CONN_TIMEOUT = 15
+# Increased from 15s to 30s to avoid "No existing session" errors on TP-Link
+# JetStream firmware when consecutive PoE cycles overwhelm the SSH server.
+DEFAULT_CONN_TIMEOUT = 30
+# Banner and auth timeouts protect against slow SSH negotiation phases where
+# the TCP connection succeeds but banner exchange or authentication stalls.
+DEFAULT_BANNER_TIMEOUT = 20
+DEFAULT_AUTH_TIMEOUT = 20
+# Retry the SSH connect a few times to smooth over transient session drops
+# observed when PDUDaemon issues rapid sequential PoE commands.
+DEFAULT_CONNECT_RETRIES = 3
+DEFAULT_CONNECT_RETRY_DELAY = 2.0
 
 
 class SwitchLockTimeoutError(TimeoutError):
@@ -311,18 +321,43 @@ class SwitchClient:
         Disables SSH agent and key-file scanning to force password auth,
         avoiding connection drops on devices that reject unsolicited key
         offers (e.g. TP-Link JetStream firmware).
+
+        Retries on transient failures (e.g. "No existing session") that occur
+        when rapid sequential PoE cycles overwhelm the switch SSH server.
         """
         from netmiko import ConnectHandler
 
-        return ConnectHandler(
+        connect_kwargs = dict(
             device_type=self.device_type,
             host=self.host,
             username=self.user,
             password=self.password,
             conn_timeout=self.conn_timeout,
+            banner_timeout=DEFAULT_BANNER_TIMEOUT,
+            auth_timeout=DEFAULT_AUTH_TIMEOUT,
             allow_agent=False,
             use_keys=False,
         )
+
+        last_error: Exception | None = None
+        for attempt in range(1, DEFAULT_CONNECT_RETRIES + 1):
+            try:
+                return ConnectHandler(**connect_kwargs)
+            except Exception as e:
+                last_error = e
+                if attempt < DEFAULT_CONNECT_RETRIES:
+                    logger.warning(
+                        "SSH connect attempt %d/%d failed (%s); retrying in %.1fs",
+                        attempt,
+                        DEFAULT_CONNECT_RETRIES,
+                        e,
+                        DEFAULT_CONNECT_RETRY_DELAY,
+                    )
+                    time.sleep(DEFAULT_CONNECT_RETRY_DELAY)
+
+        # All retries exhausted - re-raise the last error for the caller to log.
+        assert last_error is not None
+        raise last_error
 
     def send_config_commands(self, commands: list[str]) -> bool:
         """Send configuration commands to the switch."""
