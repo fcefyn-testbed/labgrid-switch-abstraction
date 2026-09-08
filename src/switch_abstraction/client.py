@@ -45,6 +45,11 @@ DEFAULT_AUTH_TIMEOUT = 20
 # observed when PDUDaemon issues rapid sequential PoE commands.
 DEFAULT_CONNECT_RETRIES = 3
 DEFAULT_CONNECT_RETRY_DELAY = 2.0
+# Retry config-mode entry: TP-Link JetStream switches are slow to release the
+# config session after a disconnect, causing "Failed to enter configuration
+# mode" when PDUDaemon issues back-to-back off/on commands.
+DEFAULT_CONFIG_MODE_RETRIES = 3
+DEFAULT_CONFIG_MODE_RETRY_DELAY = 3.0
 
 
 class SwitchLockTimeoutError(TimeoutError):
@@ -327,17 +332,17 @@ class SwitchClient:
         """
         from netmiko import ConnectHandler
 
-        connect_kwargs = dict(
-            device_type=self.device_type,
-            host=self.host,
-            username=self.user,
-            password=self.password,
-            conn_timeout=self.conn_timeout,
-            banner_timeout=DEFAULT_BANNER_TIMEOUT,
-            auth_timeout=DEFAULT_AUTH_TIMEOUT,
-            allow_agent=False,
-            use_keys=False,
-        )
+        connect_kwargs = {
+            "device_type": self.device_type,
+            "host": self.host,
+            "username": self.user,
+            "password": self.password,
+            "conn_timeout": self.conn_timeout,
+            "banner_timeout": DEFAULT_BANNER_TIMEOUT,
+            "auth_timeout": DEFAULT_AUTH_TIMEOUT,
+            "allow_agent": False,
+            "use_keys": False,
+        }
 
         last_error: Exception | None = None
         for attempt in range(1, DEFAULT_CONNECT_RETRIES + 1):
@@ -360,36 +365,59 @@ class SwitchClient:
         raise last_error
 
     def send_config_commands(self, commands: list[str]) -> bool:
-        """Send configuration commands to the switch."""
+        """Send configuration commands to the switch.
+
+        Retries the full connect → config-mode → commands cycle to handle
+        TP-Link JetStream switches that are slow to release config mode
+        after a prior session disconnect (common during PDUDaemon reboot
+        which fires off + on as separate script invocations).
+        """
         if not commands:
             logger.info("No commands to send, skipping SSH session")
             return True
 
         try:
             with switch_lock():
-                try:
-                    conn = self._connect()
-                except Exception as e:
-                    logger.error("SSH connection to switch failed: %s", e)
-                    return False
+                for attempt in range(1, DEFAULT_CONFIG_MODE_RETRIES + 1):
+                    conn = None
+                    try:
+                        conn = self._connect()
+                        output = conn.send_config_set(
+                            commands,
+                            cmd_verify=False,
+                        )
+                        logger.debug("Switch output:\n%s", output)
+                        logger.info(
+                            "Switch configuration applied successfully (%d commands)",
+                            len(commands),
+                        )
+                        self._save_config(conn)
+                        return True
+                    except Exception as e:
+                        if conn is None:
+                            logger.error("SSH connection to switch failed: %s", e)
+                            return False
+                        if attempt < DEFAULT_CONFIG_MODE_RETRIES:
+                            logger.warning(
+                                "Config attempt %d/%d failed (%s); "
+                                "retrying in %.1fs",
+                                attempt,
+                                DEFAULT_CONFIG_MODE_RETRIES,
+                                e,
+                                DEFAULT_CONFIG_MODE_RETRY_DELAY,
+                            )
+                            time.sleep(DEFAULT_CONFIG_MODE_RETRY_DELAY)
+                        else:
+                            logger.error(
+                                "Switch command execution failed after %d attempts: %s",
+                                DEFAULT_CONFIG_MODE_RETRIES,
+                                e,
+                            )
+                    finally:
+                        if conn is not None:
+                            conn.disconnect()
 
-                try:
-                    output = conn.send_config_set(
-                        commands,
-                        cmd_verify=False,
-                    )
-                    logger.debug("Switch output:\n%s", output)
-                    logger.info(
-                        "Switch configuration applied successfully (%d commands)",
-                        len(commands),
-                    )
-                    self._save_config(conn)
-                    return True
-                except Exception as e:
-                    logger.error("Switch command execution failed: %s", e)
-                    return False
-                finally:
-                    conn.disconnect()
+                return False
         except SwitchLockTimeoutError as e:
             logger.error("%s", e)
             return False
@@ -488,7 +516,12 @@ class SwitchClient:
         return success
 
     def poe_cycle_multi(self, ports: list[int], delay_sec: float = 3.0) -> bool:
-        """Power cycle one or more PoE ports: off all, wait, on all."""
+        """Power cycle one or more PoE ports: off all, wait, on all.
+
+        Keeps config mode active between off and on to avoid the
+        TP-Link JetStream "Failed to enter configuration mode" error
+        that occurs when re-entering config mode on the same session.
+        """
         off_cmds: list[str] = []
         on_cmds: list[str] = []
         for port in ports:
@@ -504,7 +537,9 @@ class SwitchClient:
                     return False
 
                 try:
-                    conn.send_config_set(off_cmds, cmd_verify=False)
+                    conn.send_config_set(
+                        off_cmds, cmd_verify=False, exit_config_mode=False,
+                    )
                     logger.info("PoE off on port(s) %s, waiting %.1fs", ports, delay_sec)
                     time.sleep(delay_sec)
 
