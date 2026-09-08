@@ -15,7 +15,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff"]
+# Ruff is pinned to a minor range: newer releases enable additional lint
+# rules by default and would break CI without any code change on our side.
+# Bump this pin deliberately when we opt into the new rules.
+dev = ["pytest", "ruff>=0.14,<0.15"]
 
 [project.scripts]
 switch-vlan = "switch_abstraction.vlan_manager:main"
