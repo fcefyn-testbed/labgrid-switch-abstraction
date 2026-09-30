@@ -100,9 +100,20 @@ def get_lock_timeout() -> float:
 
 
 def _open_lock_file(lock_path: str):
-    """Open lock file for flock. Creates with 0o666 to allow any user to open it."""
+    """Open lock file for flock. Creates with 0o666 to allow any user to open it.
+
+    os.open honours umask, so O_CREAT with 0o666 may produce 0o644 under the
+    default 0o022 umask. fchmod right after creation forces 0o666 while we are
+    still the owner (the only moment a non-root process can widen permissions
+    on a sticky-bit /tmp file).
+    """
     try:
-        return os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o666)
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o666)
+        try:
+            os.fchmod(fd, 0o666)
+        except OSError:
+            pass  # best effort; at least the caller can use its own fd
+        return fd
     except PermissionError:
         if os.path.exists(lock_path):
             try:
